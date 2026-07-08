@@ -1,0 +1,237 @@
+apiVersion: schema.esdm.io/core/v1
+kind: domain
+name: todo
+description: A small task list, modeled as an event-sourced aggregate.
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: tasks
+scope:
+  domain: todo
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: task
+scope:
+  domain: todo
+  boundedContext: tasks
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id: { type: string }
+    title: { type: string }
+    completed: { type: boolean, default: false }
+  required: [id, title, completed]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: task-added
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    id: { type: string }
+    title: { type: string }
+  required: [id, title]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: task-renamed
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    id: { type: string }
+    title: { type: string }
+  required: [id, title]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: task-completion-changed
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    id: { type: string }
+    completed: { type: boolean }
+  required: [id, completed]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: task-deleted
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    id: { type: string }
+    title: { type: string }
+  required: [id, title]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: add-task
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    title: { type: string }
+  required: [title]
+publishes:
+  - task-added
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: rename-task
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    id: { type: string }
+    title: { type: string }
+  required: [id, title]
+publishes:
+  - task-renamed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: set-completion
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    id: { type: string }
+    completed: { type: boolean }
+  required: [id, completed]
+publishes:
+  - task-completion-changed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: delete-task
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+data:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+publishes:
+  - task-deleted
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: tasks
+scope:
+  domain: todo
+  boundedContext: tasks
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id: { type: string }
+    title: { type: string }
+    completed: { type: boolean, default: false }
+  required: [id, title, completed]
+projections:
+  - boundedContext: tasks
+    aggregate: task
+    event: task-added
+    rule: Insert a row with id, title and completed=false.
+  - boundedContext: tasks
+    aggregate: task
+    event: task-renamed
+    rule: Update title for the row.
+  - boundedContext: tasks
+    aggregate: task
+    event: task-completion-changed
+    rule: Update completed for the row.
+  - boundedContext: tasks
+    aggregate: task
+    event: task-deleted
+    rule: Delete the row.
+---
+# A second read model fed only by task-deleted — an archive of removed tasks.
+# Same event log, a different projection: the power of event sourcing.
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: deleted-tasks
+scope:
+  domain: todo
+  boundedContext: tasks
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id: { type: string }
+    title: { type: string }
+  required: [id, title]
+projections:
+  - boundedContext: tasks
+    aggregate: task
+    event: task-deleted
+    rule: Insert a row with id and title when a task is deleted.
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-deleted-tasks
+scope:
+  domain: todo
+  boundedContext: tasks
+readModel: deleted-tasks
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-tasks
+scope:
+  domain: todo
+  boundedContext: tasks
+readModel: tasks
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-task
+scope:
+  domain: todo
+  boundedContext: tasks
+readModel: tasks
+parameters:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+result:
+  type: object

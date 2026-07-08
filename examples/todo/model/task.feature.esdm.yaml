@@ -1,0 +1,67 @@
+# Given-When-Then behavioral specs for the `task` aggregate (ESDM GWT extension).
+# These are executable: the generator turns each scenario into a patchlevel
+# AggregateRootTestCase test (given events -> when command -> then events).
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: task-lifecycle
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+scenarios:
+  - name: add-a-task
+    when:
+      command: add-task
+      data: { title: "Buy milk" }
+    then:
+      events:
+        - event: task-added
+          data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy milk" }
+
+  - name: rename-an-existing-task
+    given:
+      - event: task-added
+        data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy milk" }
+    when:
+      command: rename-task
+      data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy oat milk" }
+    then:
+      events:
+        - event: task-renamed
+          data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy oat milk" }
+
+  - name: complete-a-task
+    given:
+      - event: task-added
+        data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy milk" }
+    when:
+      command: set-completion
+      data: { id: "11111111-1111-1111-1111-111111111111", completed: true }
+    then:
+      events:
+        - event: task-completion-changed
+          data: { id: "11111111-1111-1111-1111-111111111111", completed: true }
+
+  - name: delete-a-task
+    given:
+      - event: task-added
+        data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy milk" }
+    when:
+      command: delete-task
+      data: { id: "11111111-1111-1111-1111-111111111111" }
+    then:
+      events:
+        - event: task-deleted
+          data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy milk" }
+
+  - name: reject-renaming-a-deleted-task
+    given:
+      - event: task-added
+        data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy milk" }
+      - event: task-deleted
+        data: { id: "11111111-1111-1111-1111-111111111111", title: "Buy milk" }
+    when:
+      command: rename-task
+      data: { id: "11111111-1111-1111-1111-111111111111", title: "Hacked" }
+    then:
+      rejection: { reason: a deleted task cannot be renamed }

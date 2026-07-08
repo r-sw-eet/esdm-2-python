@@ -1,0 +1,20 @@
+# Aggregate state machine (esdm2symfony extension, proposal 0001). Sidecar file
+# so `esdm lint` (core only) leaves it alone; the generator reads it.
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: task-lifecycle
+scope:
+  domain: todo
+  boundedContext: tasks
+  aggregate: task
+initial: open
+states:
+  - { name: open }
+  - { name: deleted, final: true }
+transitions:                 # evolve: events advance the lifecycle
+  - { on: task-added, to: open }
+  - { on: task-deleted, to: deleted }
+admits:                      # decide: a deleted task admits nothing
+  - { command: rename-task, from: [open] }
+  - { command: set-completion, from: [open] }
+  - { command: delete-task, from: [open] }

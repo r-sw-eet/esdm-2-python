@@ -1,0 +1,19 @@
+# --- scaffold-project (managed) ---
+.idea/
+LOCKS.md
+CLAUDE.md
+HANDOFF.md
+# --- end scaffold-project ---
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Generated output is disposable — regenerate with `esdm2python generate` (matches
+# the sibling codegens, which gitignore their generated/ trees).
+examples/*/generated/
+

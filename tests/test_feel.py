@@ -1,0 +1,35 @@
+import pytest
+
+from esdm2python.feel import FeelError, compile_to_python, parse, validate
+
+
+def _py(source: str) -> str:
+    expr, _today, _now = compile_to_python(parse(source), lambda name: f"self.{name}")
+    return expr
+
+
+def test_comparison_and_equality():
+    assert _py("paidAmount >= total") == "(self.paidAmount >= self.total)"
+    assert _py('status = "sent"') == "(self.status == 'sent')"
+
+
+def test_boolean_and_membership():
+    assert _py("a and b or c") == "((self.a and self.b) or self.c)"
+    assert _py('status in ["sent", "draft"]') == "(self.status in ['sent', 'draft'])"
+    assert _py("not (done)") == "(not (self.done))"
+
+
+def test_clock_calls_flag_usage():
+    expr, uses_today, uses_now = compile_to_python(parse("validUntil >= today()"), lambda n: f"self.{n}")
+    assert expr == "(self.validUntil >= today)"
+    assert uses_today is True and uses_now is False
+
+
+def test_validate_reports_unknown_fields():
+    assert validate(parse("total >= paid"), {"total", "paid"}) == []
+    assert validate(parse("total >= mystery"), {"total"}) == ['unknown field "mystery"']
+
+
+def test_malformed_raises():
+    with pytest.raises(FeelError):
+        parse("a >= ")
