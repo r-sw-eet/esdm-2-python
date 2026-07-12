@@ -17,3 +17,4 @@ venv/
 # the sibling codegens, which gitignore their generated/ trees).
 examples/*/generated/
 
+.c4work/
