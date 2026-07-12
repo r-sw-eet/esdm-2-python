@@ -62,5 +62,10 @@ class AdapterRegistry:
     @staticmethod
     def with_defaults() -> "AdapterRegistry":
         from .adapters.django import DjangoEventSourcingAdapter
+        from .adapters.django_esdb import DjangoEventSourcingDbAdapter
 
-        return AdapterRegistry().register(DjangoEventSourcingAdapter())
+        return (
+            AdapterRegistry()
+            .register(DjangoEventSourcingAdapter())
+            .register(DjangoEventSourcingDbAdapter())
+        )

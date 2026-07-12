@@ -3,11 +3,21 @@
 The **Python codegen** of the BPAG family: it turns a business-process / domain model —
 authored as **BPMN** or as an [ESDM](https://www.esdm.io/) model (Event-Sourced Domain
 Modeling — YAML documents describing an event-sourced domain) — into a **real, runnable
-application**. Its target emits a **Django** app that implements the model with **CQRS**, an
-**event-driven read side** and **event sourcing**, on **PostgreSQL** — using
-[`eventsourcing`](https://github.com/pyeventsourcing/eventsourcing) (John Bywater) as the
-runtime, with the [`eventsourcing-django`](https://github.com/pyeventsourcing/eventsourcing-django)
-persistence module.
+application**. It emits **Django** apps that implement the model with **CQRS**, an
+**event-driven read side** and **event sourcing**, in one of two flavors:
+
+| Target                          | Event store                                                                                                               | Read models                | Projection style                                   |
+|---------------------------------|---------------------------------------------------------------------------------------------------------------------------|----------------------------|----------------------------------------------------|
+| `django-eventsourcing-postgres` | PostgreSQL via [`eventsourcing`](https://github.com/pyeventsourcing/eventsourcing) + `eventsourcing-django`, hash-chained | Django-ORM `rm_*` tables   | pull-based, on the request path (read-your-writes) |
+| `django-eventsourcingdb`        | [EventSourcingDB](https://www.eventsourcingdb.io/) via the official `eventsourcingdb` SDK                                 | MongoDB `rm_*` collections | `observe` worker process (eventually consistent)   |
+
+Both serve the **same HTTP surface** (`POST /{context}/{command}`, `GET /{context}/{query}`,
+409 on rejected domain rules, the 0004 `/_dev/*` dev contract), so a client can't tell which
+backend is behind it. The EventSourcingDB target writes the family's shared wire envelope
+(`data = { payload, nimbusMeta }`, type `<domain>.<aggregate>.<event>`, subject
+`/<aggregate>/<id>`), so its store is interchangeable with the sibling codegens'. The
+PostgreSQL target hash-chains its event log in-database (`manage.py eventstore_hashchain` /
+`eventstore_verify`) for tamper evidence.
 
 It is the sibling of `esdm-2-symfony` (PHP → Symfony +
 `patchlevel/event-sourcing`) and `esdm-2-nimbus` (TypeScript → Nimbus): **same model in, an
@@ -17,25 +27,44 @@ equivalent event-sourced app out**, in a different stack.
 
 ## Status
 
-**Working codegen.** The generator — model parser + Django adapter + CLI — lives under
+**Working codegen.** The generator — model parser + the two Django adapters + CLI — lives under
 [`src/esdm2python/`](src/esdm2python/). Point it at an ESDM model and it emits a complete, runnable
 Django app:
 
 ```sh
-python -m esdm2python.cli generate examples/todo   # -> examples/todo/generated/python/
+python -m esdm2python.cli generate examples/todo   # default target -> examples/todo/generated/python/
+python -m esdm2python.cli generate examples/todo --target django-eventsourcingdb
+                                                   # -> examples/todo/generated/python-esdb/
 python -m esdm2python.cli targets                  # list adapter targets
 ```
 
 The pipeline mirrors the sibling generators (`esdm-2-symfony`, `esdm-2-nimbus`): **load the ESDM
-YAML → build a stack-neutral typed model → FEEL gate → the Django adapter emits an in-memory file
-tree → write to disk**. Everything upstream of the adapter is framework-agnostic; only the adapter
-knows the target stack. Generated output is disposable (gitignored) — regenerate it, never edit by
-hand.
+YAML → build a stack-neutral typed model → FEEL gate → the chosen adapter emits an in-memory file
+tree → write to disk**. Everything upstream of the adapters is framework-agnostic; only the
+adapters know their target stack. Generated output is disposable (gitignored) — regenerate it,
+never edit by hand.
 
-Verified by generator unit tests (`pytest`) plus a smoke gate (`scripts/conformance.sh`); the
-emitted `todo` app's own write-side GWT tests pass against real `eventsourcing`, and the full
-Django + PostgreSQL stack boots and serves the domain surface + 0004 contract under
-`docker compose`.
+Verified by generator unit tests (`pytest`) plus a smoke gate (`scripts/conformance.sh`, every
+example × every target); the emitted `todo` app's own write-side GWT tests pass, and both full
+stacks (Django + PostgreSQL; Django + EventSourcingDB + MongoDB) boot and serve the domain
+surface + 0004 contract under `docker compose`.
+
+## The two targets
+
+**`django-eventsourcing-postgres`** (default) is the single-database flavor: the event store is
+a Django-ORM table (`stored_events`) via `eventsourcing-django`, projections run synchronously
+on the request path (read-your-writes), and the whole app needs only PostgreSQL. Its event log
+is **tamper-evident**: `manage.py eventstore_hashchain` (run on boot) installs a `BEFORE INSERT`
+trigger that hash-chains every event to its predecessor in-database (appends serialized by an
+advisory lock), and `manage.py eventstore_verify` re-computes the chain in pure SQL — exit 0
+when intact, exit 1 naming the first broken event id.
+
+**`django-eventsourcingdb`** is the dedicated-event-store flavor: commands replay their subject
+from **EventSourcingDB** (official `eventsourcingdb` SDK; preconditions `isSubjectPristine` /
+`isSubjectPopulated` guard concurrency), fold pure state and append new events; a long-running
+`manage.py observe` worker (its own compose service) tails the store and folds events into
+**MongoDB** `rm_*` collections — resuming from each read model's max stored `revision` — and
+runs the model's policies. EventSourcingDB brings its own hash chain (`predecessorhash`).
 
 ## Why `eventsourcing`
 
@@ -77,10 +106,19 @@ pip install -e .                                   # PyYAML is the only runtime 
 python -m esdm2python.cli generate examples/todo   # -> examples/todo/generated/python/
 
 cd examples/todo/generated/python
-docker compose up -d --build      # api migrates on boot, serves on :8080
+docker compose up -d --build      # api migrates + arms the hash chain on boot, serves on :8080
 curl -s -XPOST localhost:8080/tasks/add-task -d '{"title":"Buy milk"}'
 curl -s localhost:8080/tasks/list-tasks
 curl -s localhost:8080/_dev/catalog          # 0004 domain-console contract
+docker compose exec api python manage.py eventstore_verify   # audit the event chain
+```
+
+Same app on the EventSourcingDB + MongoDB stack:
+
+```sh
+python -m esdm2python.cli generate examples/todo --target django-eventsourcingdb
+cd examples/todo/generated/python-esdb
+docker compose up -d --build      # esdb + mongo + api (:8080) + observe worker
 ```
 
 The emitted app's own write-side lifecycle tests (in-memory, no database):

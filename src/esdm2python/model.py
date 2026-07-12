@@ -258,6 +258,20 @@ class BoundedContext:
 
 
 @dataclass(frozen=True)
+class Policy:
+    """A stateless reaction: one handled event dispatches one emitted command."""
+
+    name: str
+    domain: str
+    handle_context: str
+    handle_aggregate: str
+    handle_event: str
+    emit_context: str
+    emit_aggregate: str
+    emit_command: str
+
+
+@dataclass(frozen=True)
 class EventExample:
     event: str
     data: dict
@@ -290,6 +304,7 @@ class Model:
     domain: str
     bounded_contexts: list[BoundedContext] = field(default_factory=list)
     features: list[Feature] = field(default_factory=list)
+    policies: list[Policy] = field(default_factory=list)
 
     def aggregates(self) -> list[Aggregate]:
         return [a for c in self.bounded_contexts for a in c.aggregates]
@@ -474,10 +489,30 @@ def create_model(documents: list[dict]) -> Model:
             continue
         features.append(_parse_feature(doc, domain_name, scope))
 
+    policies: list[Policy] = []
+    for doc in by_kind.get("policy", []):
+        handle = _record(next(iter(_listy(doc.get("handles"))), None))
+        emit = _record(next(iter(_listy(doc.get("emits"))), None))
+        if not handle.get("aggregate") or not emit.get("aggregate"):
+            continue  # only aggregate-bound handle/emit are supported for now
+        policies.append(
+            Policy(
+                name=str(doc.get("name")),
+                domain=domain_name,
+                handle_context=str(handle.get("boundedContext") or "default"),
+                handle_aggregate=str(handle.get("aggregate")),
+                handle_event=str(handle.get("event") or ""),
+                emit_context=str(emit.get("boundedContext") or "default"),
+                emit_aggregate=str(emit.get("aggregate")),
+                emit_command=str(emit.get("command") or ""),
+            )
+        )
+
     return Model(
         domain=domain_name,
         bounded_contexts=list(contexts.values()),
         features=features,
+        policies=policies,
     )
 
 

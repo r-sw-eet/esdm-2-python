@@ -59,3 +59,30 @@ def test_read_models_and_queries():
 def test_no_domain_document_raises():
     with pytest.raises(ValueError):
         create_model([{"kind": "bounded-context", "name": "x"}])
+
+
+def test_policy_parsing():
+    documents = load_directory(MODEL_DIR)
+    documents.append({
+        "kind": "policy",
+        "name": "archive-on-delete",
+        "handles": [{"boundedContext": "tasks", "aggregate": "task", "event": "task-deleted"}],
+        "emits": [{"boundedContext": "tasks", "aggregate": "task", "command": "rename-task"}],
+    })
+    documents.append({
+        "kind": "policy",
+        "name": "not-aggregate-bound",
+        "handles": [{"event": "task-deleted"}],
+        "emits": [{"command": "rename-task"}],
+    })
+    model = create_model(documents)
+    assert build().policies == []
+    assert len(model.policies) == 1  # only aggregate-bound handle/emit are supported
+    policy = model.policies[0]
+    assert policy.name == "archive-on-delete"
+    assert (policy.handle_context, policy.handle_aggregate, policy.handle_event) == (
+        "tasks", "task", "task-deleted",
+    )
+    assert (policy.emit_context, policy.emit_aggregate, policy.emit_command) == (
+        "tasks", "task", "rename-task",
+    )
