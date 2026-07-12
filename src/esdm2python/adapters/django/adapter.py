@@ -109,6 +109,10 @@ class DjangoEventSourcingAdapter:
         project.add("shared/errors.py", t.ERRORS)
         project.add("shared/cors.py", t.CORS)
         project.add("shared/runtime.py", self._runtime(model, primary))
+        project.add("shared/management/__init__.py", "")
+        project.add("shared/management/commands/__init__.py", "")
+        project.add("shared/management/commands/eventstore_hashchain.py", t.HASHCHAIN_COMMAND)
+        project.add("shared/management/commands/eventstore_verify.py", t.VERIFY_COMMAND)
 
         project.add("dev/__init__.py", "")
         project.add("dev/views.py", self._dev_views(model))
@@ -255,6 +259,9 @@ class DjangoEventSourcingAdapter:
             "            raise IllegalTransition(command, self.status)",
         ]
 
+    # receiver the compiled FEEL guards read state from (`state` in pure-fold targets)
+    guard_receiver = "self"
+
     def _guard_expr(self, agg: Aggregate, cmd: Command) -> tuple[str, str] | None:
         sm = agg.state_machine
         if sm is None:
@@ -262,7 +269,7 @@ class DjangoEventSourcingAdapter:
         admit = sm.admit_for(cmd.name)
         if admit is None or not admit.when:
             return None
-        return feel_guard(admit.when)
+        return feel_guard(admit.when, self.guard_receiver)
 
     def _application(self, model: Model) -> str:
         app_class = self._app_class(model)
@@ -627,7 +634,8 @@ class DjangoEventSourcingAdapter:
     # -- project-level files -------------------------------------------------
 
     def _settings(self, model: Model) -> str:
-        apps = ['"eventsourcing_django"'] + [f'"{c.name}"' for c in model.bounded_contexts]
+        # `shared` is an app so manage.py finds the eventstore_* commands
+        apps = ['"eventsourcing_django"', '"shared"'] + [f'"{c.name}"' for c in model.bounded_contexts]
         installed = "\n".join(f"    {a}," for a in apps)
         return _file([
             '"""Django settings for the generated `' + model.domain + "` app.",
@@ -942,6 +950,20 @@ class DjangoEventSourcingAdapter:
             "with the [`eventsourcing-django`](https://github.com/pyeventsourcing/eventsourcing-django)",
             "persistence module (event store in Django's own database).",
             "",
+            "## Tamper evidence",
+            "",
+            "Every stored event is hash-chained to its predecessor **in-database**: a",
+            "`BEFORE INSERT` trigger on `stored_events` (installed on boot by",
+            "`manage.py eventstore_hashchain`, idempotent) computes",
+            "`hash = sha256(predecessor_hash + immutable columns)`, with appends serialized",
+            "by an advisory lock. A mutated, deleted or reordered event breaks every hash",
+            "after it. Audit the log any time:",
+            "",
+            "```sh",
+            "docker compose exec api python manage.py eventstore_verify",
+            "# -> \"event chain intact (N events)\" and exit 0, or the first broken id and exit 1",
+            "```",
+            "",
             "## Run",
             "",
             "```sh",
@@ -965,9 +987,9 @@ class DjangoEventSourcingAdapter:
         ])
 
 
-def feel_guard(when: str) -> tuple[str, str]:
-    """Compile a FEEL guard string to (python-expr-over-self, human requirement)."""
+def feel_guard(when: str, receiver: str = "self") -> tuple[str, str]:
+    """Compile a FEEL guard string to (python-expr-over-receiver, human requirement)."""
     from ...feel import compile_to_python, parse
 
-    expr, _uses_today, _uses_now = compile_to_python(parse(when), lambda name: f"self.{snake(name)}")
+    expr, _uses_today, _uses_now = compile_to_python(parse(when), lambda name: f"{receiver}.{snake(name)}")
     return expr, when

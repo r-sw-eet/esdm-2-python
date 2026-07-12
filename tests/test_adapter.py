@@ -22,11 +22,32 @@ def test_expected_file_set(files):
         "tasks/models.py", "tasks/finders.py", "tasks/views.py", "tasks/urls.py",
         "tasks/migrations/0001_initial.py",
         "shared/errors.py", "shared/cors.py", "shared/runtime.py",
+        "shared/management/commands/eventstore_hashchain.py",
+        "shared/management/commands/eventstore_verify.py",
         "dev/views.py", "dev/urls.py", "dev/catalog.json",
         "tests/test_task_lifecycle.py",
         "manage.py", "Dockerfile", "compose.yaml", "requirements.txt",
     ]:
         assert path in files, f"missing {path}"
+
+
+def test_hash_chain_commands(files):
+    install = files["shared/management/commands/eventstore_hashchain.py"]
+    assert "CREATE EXTENSION IF NOT EXISTS pgcrypto;" in install
+    assert "ADD COLUMN IF NOT EXISTS predecessor_hash TEXT NOT NULL DEFAULT ''" in install
+    assert "pg_advisory_xact_lock(4711)" in install          # appends serialize -> linear chain
+    assert "repeat('0', 64)" in install                      # genesis predecessor
+    assert "BEFORE INSERT ON stored_events" in install
+    assert "encode(NEW.state, 'hex')" in install             # bytea hashed deterministically
+
+    verify = files["shared/management/commands/eventstore_verify.py"]
+    assert "lag(hash) OVER (ORDER BY id)" in verify          # link check names the successor
+    assert "WHERE hash <> '' AND (bad_hash OR bad_link)" in verify  # pre-chain rows skipped
+    assert "raise CommandError" in verify                    # exit 1 with the first broken id
+
+    # installed on boot, after migrate; `shared` is an app so manage.py finds the commands
+    assert "manage.py migrate --noinput && python manage.py eventstore_hashchain" in files["Dockerfile"]
+    assert '"shared",' in files["config/settings.py"]
 
 
 def test_domain_decide_evolve(files):

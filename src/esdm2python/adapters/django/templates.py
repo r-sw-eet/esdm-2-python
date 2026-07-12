@@ -132,8 +132,94 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 8000
-# migrate creates both the eventsourcing_django event store and the rm_* read models
-CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"]
+# migrate creates the eventsourcing_django event store and the rm_* read models;
+# eventstore_hashchain then arms the tamper-evidence trigger on stored_events
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py eventstore_hashchain && python manage.py runserver 0.0.0.0:8000"]
+'''
+
+HASHCHAIN_COMMAND = '''"""Installs the in-database hash chain on the event store (idempotent).
+
+Every stored event is chained to its predecessor, like EventSourcingDB's
+predecessorhash: a BEFORE INSERT trigger hashes the row's immutable columns
+together with the previous row's hash, so a later UPDATE, DELETE or reorder
+breaks every hash after it. An advisory lock serializes appends, keeping the
+chain linear under concurrency. Audit the log with `manage.py eventstore_verify`.
+"""
+
+from __future__ import annotations
+
+from django.core.management.base import BaseCommand
+from django.db import connection
+
+INSTALL_SQL = """
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+ALTER TABLE stored_events ADD COLUMN IF NOT EXISTS predecessor_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE stored_events ADD COLUMN IF NOT EXISTS hash TEXT NOT NULL DEFAULT '';
+CREATE OR REPLACE FUNCTION stored_events_hash_chain() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(4711);
+    SELECT hash INTO NEW.predecessor_hash FROM stored_events ORDER BY id DESC LIMIT 1;
+    NEW.predecessor_hash := COALESCE(NEW.predecessor_hash, repeat('0', 64));
+    NEW.hash := encode(digest(jsonb_build_array(
+        NEW.predecessor_hash, NEW.id, NEW.application_name, NEW.originator_id::text,
+        NEW.originator_version, NEW.topic, encode(NEW.state, 'hex')
+    )::text, 'sha256'), 'hex');
+    RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE OR REPLACE TRIGGER stored_events_hash_chain
+    BEFORE INSERT ON stored_events
+    FOR EACH ROW EXECUTE FUNCTION stored_events_hash_chain();
+"""
+
+
+class Command(BaseCommand):
+    help = "Install the tamper-evidence hash chain on the stored_events table (idempotent)."
+
+    def handle(self, *args, **options):
+        with connection.cursor() as cursor:
+            cursor.execute(INSTALL_SQL)
+        self.stdout.write("hash chain installed on stored_events")
+'''
+
+VERIFY_COMMAND = '''"""Verifies the event-store hash chain in pure SQL.
+
+Recomputes every row's hash and checks every predecessor link (a deleted or
+reordered event breaks the link on its successor). Rows stored before the
+chain was installed (empty hash) are skipped. Exits 0 when the log is intact,
+exits 1 naming the first broken event id.
+"""
+
+from __future__ import annotations
+
+from django.core.management.base import BaseCommand, CommandError
+from django.db import connection
+
+VERIFY_SQL = """
+SELECT min(id) FROM (
+    SELECT id, hash,
+        hash <> encode(digest(jsonb_build_array(
+            predecessor_hash, id, application_name, originator_id::text,
+            originator_version, topic, encode(state, 'hex')
+        )::text, 'sha256'), 'hex') AS bad_hash,
+        predecessor_hash <> COALESCE(lag(hash) OVER (ORDER BY id), repeat('0', 64)) AS bad_link
+    FROM stored_events
+) checked
+WHERE hash <> '' AND (bad_hash OR bad_link)
+"""
+
+
+class Command(BaseCommand):
+    help = "Verify the event-store hash chain; exit 1 at the first broken event."
+
+    def handle(self, *args, **options):
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM stored_events")
+            total = cursor.fetchone()[0]
+            cursor.execute(VERIFY_SQL)
+            broken_at = cursor.fetchone()[0]
+        if broken_at is not None:
+            raise CommandError(f"event chain broken at id {broken_at}")
+        self.stdout.write(f"event chain intact ({total} events)")
 '''
 
 COMPOSE = '''# Generated stack: db (PostgreSQL) + api (write/read HTTP with synchronous projection).
