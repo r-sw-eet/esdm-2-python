@@ -48,7 +48,9 @@ def test_domain_pure_decide_evolve(files):
     # delete evolves to the final state; admit guards decide
     assert "status=TaskState.DELETED," in domain
     assert '_admit("rename-task", state)' in domain
-    assert "if state.status not in (TaskState.OPEN,):" in domain
+    # admits are per-command, not the union of all commands' from-states
+    assert '"rename-task": (TaskState.OPEN,),' in domain
+    assert "if state.status not in _ADMITS[command]:" in domain
     # delete carries current state into the event
     assert '"title": state.title,' in domain
 
@@ -99,7 +101,8 @@ def test_finders_strip_internals(files):
 def test_views_same_http_semantics(files):
     views = files["tasks/views.py"]
     assert "status=409" in views
-    assert "status=201" in views
+    # creates return 200 {id} — harmonized with the nimbus family (C4)
+    assert 'JsonResponse({"id": result})' in views
     assert "AggregateNotFound" in views
     # eventually consistent: no projection call on the request path
     assert "projections.project" not in views

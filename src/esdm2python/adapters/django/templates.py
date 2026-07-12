@@ -41,23 +41,38 @@ from __future__ import annotations
 class DomainViolation(RuntimeError):
     """Base for domain-rule violations (state machine + guards)."""
 
+    error_code = "DOMAIN_VIOLATION"
+
+    def details(self) -> dict:
+        return {"errorCode": self.error_code}
+
 
 class IllegalTransition(DomainViolation):
     """A command was issued from a state the aggregate does not admit it from (0001)."""
 
+    error_code = "ILLEGAL_TRANSITION"
+
     def __init__(self, command: str, state: str) -> None:
         self.command = command
-        self.state = state
-        super().__init__(f'"{command}" is not allowed while "{state}"')
+        self.state = state or "undefined"
+        super().__init__(f'{command} is not allowed while "{self.state}"')
+
+    def details(self) -> dict:
+        return {"errorCode": self.error_code, "command": self.command}
 
 
 class GuardViolation(DomainViolation):
     """A command precondition (FEEL guard) was not met (0002)."""
 
+    error_code = "GUARD_VIOLATION"
+
     def __init__(self, command: str, requirement: str) -> None:
         self.command = command
         self.requirement = requirement
-        super().__init__(f'"{command}" requires: {requirement}')
+        super().__init__(f"{command} requires: {requirement}")
+
+    def details(self) -> dict:
+        return {"errorCode": self.error_code, "command": self.command}
 '''
 
 CORS = '''"""Dev-stack CORS (0004 §5): let a domain console on another origin drive the
@@ -318,14 +333,19 @@ def _payload(request) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _run(app, fn):
-    """Execute a command, project it, and map domain outcomes to HTTP."""
+def _run(app, fn, command):
+    """Execute a command, project it, and map domain outcomes to HTTP (nimbus envelope)."""
     try:
         result = fn()
     except DomainViolation as exc:
-        return JsonResponse({"error": str(exc)}, status=409)
+        return JsonResponse({"error": "CONFLICT", "message": str(exc), "details": exc.details()}, status=409)
     except AggregateNotFound:
-        return JsonResponse({"error": "not found"}, status=404)
+        # unknown aggregate on a mutate: same wire behavior as the nimbus family
+        return JsonResponse(
+            {"error": "CONFLICT", "message": f'{command} is not allowed while "undefined"',
+             "details": {"errorCode": "ILLEGAL_TRANSITION", "command": command}},
+            status=409,
+        )
     projections.project(app)
     return result'''
 

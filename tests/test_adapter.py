@@ -58,7 +58,9 @@ def test_domain_decide_evolve(files):
     # delete evolves to the final state; admit guards decide
     assert "self.status = self.DELETED" in domain
     assert 'self._admit("rename-task")' in domain
-    assert "if self.status not in (self.OPEN,):" in domain
+    # admits are per-command, not the union of all commands' from-states
+    assert '"rename-task": (OPEN,),' in domain
+    assert "if self.status not in self._ADMITS[command]:" in domain
 
 
 def test_application_methods(files):
@@ -87,7 +89,8 @@ def test_read_model_tables(files):
 def test_views_map_violation_to_409(files):
     views = files["tasks/views.py"]
     assert "status=409" in views
-    assert "status=201" in views  # create
+    # creates return 200 {id} — harmonized with the nimbus family (C4)
+    assert 'JsonResponse({"id": result})' in views
 
 
 def test_catalog_contract(files):

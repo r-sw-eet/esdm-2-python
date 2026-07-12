@@ -187,8 +187,20 @@ class DjangoEventSourcingAdapter:
         return _file(lines + body)
 
     def _ctor(self, agg: Aggregate, cmd: Command, event: Event) -> list[str]:
-        create_fields = [f for f in event.data if not f.is_identity]
-        params = "".join(f", {snake(f.name)}: {py_type(f)}" for f in create_fields)
+        # __init__ is called with the CREATE COMMAND's fields; event-only fields
+        # (e.g. a defaulted status) become defaulted keyword params so the stored
+        # event still carries them (C4: found via the orders conformance scenario).
+        cmd_carried = {f.name for f in cmd.data if not f.is_identity}
+        create_fields = sorted(
+            (f for f in event.data if not f.is_identity),
+            key=lambda f: f.name not in cmd_carried,
+        )
+        params = "".join(
+            f", {snake(f.name)}: {py_type(f)}"
+            if f.name in cmd_carried
+            else f", {snake(f.name)}: {py_type(f)} = {default_literal(f)}"
+            for f in create_fields
+        )
         lines = [f'    @event("{self._event_domain(event, agg)}")', f"    def __init__(self{params}) -> None:"]
         carried = {f.name for f in create_fields}
         for field in agg.non_identity_state():
@@ -207,7 +219,8 @@ class DjangoEventSourcingAdapter:
             lines.append(f'        self._admit("{cmd.name}")')
         guard = self._guard_expr(agg, cmd)
         if guard is not None:
-            expr, requirement = guard
+            expr, requirement, prelude = guard
+            lines += [f"        {line}" for line in prelude]
             lines.append(f"        if not ({expr}):")
             lines.append(f'            raise GuardViolation("{cmd.name}", {json.dumps(requirement)})')
         carried = {f.name for f in cmd.data}
@@ -245,17 +258,26 @@ class DjangoEventSourcingAdapter:
             target = sm.transition_target(event.name)
             if target is not None and event.lifecycle.value != "create":
                 body.append(f"        self.status = self.{upper_const(target)}")
-        if not body:
-            body.append("        pass")
+        if not any(line.strip() and not line.strip().startswith("#") for line in body):
+            body.append("        pass")  # a comment alone is not a statement
         return lines + body
 
     def _admit(self, agg: Aggregate) -> list[str]:
-        states = agg.state_machine.admitting_states()
-        rendered = ", ".join(f"self.{upper_const(s)}" for s in states)
-        tuple_literal = f"({rendered},)" if len(states) == 1 else f"({rendered})"
+        # Per-command from-states: the union of all admitting states would wrongly
+        # admit command A from a state only command B allows (C4: orders scenario).
+        entries = []
+        for admit in agg.state_machine.admits:
+            # class-body scope: the state constants are bare names here, not self.*
+            rendered = ", ".join(upper_const(s) for s in admit.from_states)
+            trailing = "," if len(admit.from_states) == 1 else ""
+            entries.append(f'        "{admit.command}": ({rendered}{trailing}),')
         return [
+            "    _ADMITS = {",
+            *entries,
+            "    }",
+            "",
             "    def _admit(self, command: str) -> None:",
-            f"        if self.status not in {tuple_literal}:",
+            "        if self.status not in self._ADMITS[command]:",
             "            raise IllegalTransition(command, self.status)",
         ]
 
@@ -477,7 +499,7 @@ class DjangoEventSourcingAdapter:
                 if column.name == pk:
                     continue
                 value = f"event.{snake(column.name)}" if column.name in carried else default_literal(column)
-                defaults.append(f'"{column.name}": {value}')
+                defaults.append(f'"{snake(column.name)}": {value}')
             return [
                 f"        {cls}.objects.update_or_create(",
                 f"            {pk}={id_var}, defaults={{{', '.join(defaults)}}}",
@@ -582,16 +604,16 @@ class DjangoEventSourcingAdapter:
             f"def {fn}(request):",
             "    app = get_app()",
             "    data = _payload(request)",
-            f"    result = _run(app, lambda: app.{fn}({call_args}))",
+            f'    result = _run(app, lambda: app.{fn}({call_args}), "{cmd.name}")',
         ]
         if is_create:
             lines += [
                 "    if isinstance(result, HttpResponse):",
                 "        return result",
-                '    return JsonResponse({"id": result}, status=201)',
+                '    return JsonResponse({"id": result})',
             ]
         else:
-            lines.append('    return result if isinstance(result, HttpResponse) else JsonResponse({"ok": True})')
+            lines.append('    return result if isinstance(result, HttpResponse) else JsonResponse({"id": str(data.get("id", ""))})')
         return lines
 
     def _query_view(self, query) -> list[str]:
@@ -599,10 +621,18 @@ class DjangoEventSourcingAdapter:
         lines = ['@require_http_methods(["GET"])', f"def {fn}(request):", "    projections.project(get_app())"]
         if query.is_get():
             param = query.parameters.fields[0]
+            entity = studly(query.read_model)
+            code = f"{snake(query.read_model).upper()}_NOT_FOUND"
             lines += [
                 f'    row = finders.{fn}(request.GET.get("{param.name}", ""))',
                 "    if row is None:",
-                '        return JsonResponse({"error": "not found"}, status=404)',
+                '        return JsonResponse({"error": "NOT_FOUND", "message": '
+                + f'"{entity} not found"'
+                + ', "details": {"errorCode": '
+                + f'"{code}"'
+                + ', "reason": '
+                + f'"Could not find {entity} matching the given filter"'
+                + "}}, status=404)",
                 "    return JsonResponse(row)",
             ]
         else:
@@ -987,9 +1017,19 @@ class DjangoEventSourcingAdapter:
         ])
 
 
-def feel_guard(when: str, receiver: str = "self") -> tuple[str, str]:
-    """Compile a FEEL guard string to (python-expr-over-receiver, human requirement)."""
+def feel_guard(when: str, receiver: str = "self") -> tuple[str, str, list[str]]:
+    """Compile a FEEL guard to (python-expr, human requirement, prelude lines).
+
+    Temporal niladics compare as ISO strings — lexicographic order == date order,
+    and the model's date fields are ISO strings on every stack (C4)."""
     from ...feel import compile_to_python, parse
 
-    expr, _uses_today, _uses_now = compile_to_python(parse(when), lambda name: f"{receiver}.{snake(name)}")
-    return expr, when
+    expr, uses_today, uses_now = compile_to_python(parse(when), lambda name: f"{receiver}.{snake(name)}")
+    prelude: list[str] = []
+    if uses_today or uses_now:
+        prelude.append("import datetime as _dt")
+    if uses_today:
+        prelude.append("today = _dt.date.today().isoformat()")
+    if uses_now:
+        prelude.append("now = _dt.datetime.now(_dt.timezone.utc).isoformat()")
+    return expr, when, prelude

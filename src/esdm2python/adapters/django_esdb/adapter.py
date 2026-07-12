@@ -236,7 +236,8 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
             lines.append(f'    _admit("{cmd.name}", state)')
         guard = self._guard_expr(agg, cmd)
         if not is_create and guard is not None:
-            expr, requirement = guard
+            expr, requirement, prelude = guard
+            lines += [f"    {line}" for line in prelude]
             lines.append(f"    if not ({expr}):")
             lines.append(f'        raise GuardViolation("{cmd.name}", {json.dumps(requirement)})')
 
@@ -264,13 +265,22 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         return lines
 
     def _admit_fn(self, agg: Aggregate) -> list[str]:
+        # Per-command from-states: the union of all admitting states would wrongly
+        # admit command A from a state only command B allows (C4: orders scenario).
         cls = self._state_class(agg)
-        states = agg.state_machine.admitting_states()
-        rendered = ", ".join(f"{cls}.{upper_const(s)}" for s in states)
-        tuple_literal = f"({rendered},)" if len(states) == 1 else f"({rendered})"
+        entries = []
+        for admit in agg.state_machine.admits:
+            rendered = ", ".join(f"{cls}.{upper_const(s)}" for s in admit.from_states)
+            trailing = "," if len(admit.from_states) == 1 else ""
+            entries.append(f'    "{admit.command}": ({rendered}{trailing}),')
         return [
+            "_ADMITS = {",
+            *entries,
+            "}",
+            "",
+            "",
             f"def _admit(command: str, state: {cls}) -> None:",
-            f"    if state.status not in {tuple_literal}:",
+            "    if state.status not in _ADMITS[command]:",
             "        raise IllegalTransition(command, state.status)",
         ]
 
@@ -545,10 +555,18 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         lines = ['@require_http_methods(["GET"])', f"def {fn}(request):"]
         if query.is_get():
             param = query.parameters.fields[0]
+            entity = studly(query.read_model)
+            code = f"{snake(query.read_model).upper()}_NOT_FOUND"
             lines += [
                 f'    row = finders.{fn}(request.GET.get("{param.name}", ""))',
                 "    if row is None:",
-                '        return JsonResponse({"error": "not found"}, status=404)',
+                '        return JsonResponse({"error": "NOT_FOUND", "message": '
+                + f'"{entity} not found"'
+                + ', "details": {"errorCode": '
+                + f'"{code}"'
+                + ', "reason": '
+                + f'"Could not find {entity} matching the given filter"'
+                + "}}, status=404)",
                 "    return JsonResponse(row)",
             ]
         else:
@@ -602,7 +620,7 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         for field in command.data:
             if field.is_identity:
                 continue
-            if field.name == f"{policy.handle_aggregate}-id":
+            if snake(field.name) == snake(f"{policy.handle_aggregate}-id"):
                 args.append(f'str(data.get("{self._payload_key(handle.identity_field)}", ""))')
             elif event.data.has(field.name):
                 key = self._payload_key(field.name)
