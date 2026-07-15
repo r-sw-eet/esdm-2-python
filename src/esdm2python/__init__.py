@@ -1,4 +1,4 @@
-"""BPAG Python codegen — ESDM model in, a Django + `eventsourcing` app out.
+"""Python codegen: an ESDM model in, a Django + `eventsourcing` app out.
 
 The pipeline mirrors the sibling generators (`esdm-2-symfony`, `esdm-2-nimbus`):
 load the ESDM YAML, build a stack-neutral typed model, gate it (FEEL/lint), then

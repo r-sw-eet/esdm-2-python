@@ -89,7 +89,7 @@ def _targets(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="esdm2python", description="BPAG Python codegen.")
+    parser = argparse.ArgumentParser(prog="esdm2python", description="ESDM → Django code generator.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     gen = sub.add_parser("generate", help="generate an app from an ESDM model")

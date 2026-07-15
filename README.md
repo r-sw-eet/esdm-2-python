@@ -1,6 +1,6 @@
 # esdm-2-python
 
-The **Python codegen** of the BPAG family: it turns a business-process / domain model —
+The **Python codegen** of the ESDM toolchain: it turns a business-process / domain model —
 authored as **BPMN** or as an [ESDM](https://www.esdm.io/) model (Event-Sourced Domain
 Modeling — YAML documents describing an event-sourced domain) — into a **real, runnable
 application**. It emits **Django** apps that implement the model with **CQRS**, an
@@ -23,7 +23,7 @@ It is the sibling of `esdm-2-symfony` (PHP → Symfony +
 `patchlevel/event-sourcing`) and `esdm-2-nimbus` (TypeScript → Nimbus): **same model in, an
 equivalent event-sourced app out**, in a different stack.
 
-> Draw the business process. BPAG makes it run.
+> Draw the business process. The ESDM toolchain makes it run.
 
 ## Status
 
@@ -68,7 +68,7 @@ runs the model's policies. EventSourcingDB brings its own hash chain (`predecess
 
 ## Why `eventsourcing`
 
-Each BPAG target picks the mature, idiomatic event-sourcing **runtime** of its language and emits
+Each generator target picks the mature, idiomatic event-sourcing **runtime** of its language and emits
 code against it — the codegen orchestrates, it does not reimplement event sourcing. `eventsourcing`
 is the Python analog of Symfony's `patchlevel/event-sourcing`: DDD-first, persistence-agnostic,
 native PostgreSQL, with aggregates, an application/command layer, projections and snapshots. The

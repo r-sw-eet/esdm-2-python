@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "esdm2python"
 version = "0.1.0"
-description = "BPAG Python codegen: an ESDM/BPMN model in, a runnable Django + eventsourcing + PostgreSQL app out."
+description = "Python codegen: an ESDM/BPMN model in, a runnable Django app out (PostgreSQL or EventSourcingDB + MongoDB)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
