@@ -1,0 +1,291 @@
+apiVersion: schema.esdm.io/core/v1
+kind: domain
+name: orders
+description: 'Generated from a BPMN model (proposal 0003).'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: orders
+scope:
+  domain: orders
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: order
+scope:
+  domain: orders
+  boundedContext: orders
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    customerName:
+      type: string
+      default: ''
+    total:
+      type: number
+      default: 0
+    paidAmount:
+      type: number
+      default: 0
+  required:
+    - id
+    - customerName
+    - total
+    - paidAmount
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-placed
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    customerName:
+      type: string
+    total:
+      type: number
+    status:
+      type: string
+      default: placed
+  required:
+    - id
+    - customerName
+    - total
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-paid
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    paidAmount:
+      type: number
+    status:
+      type: string
+      default: paid
+  required:
+    - id
+    - paidAmount
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-shipped
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: shipped
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-cancelled
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: cancelled
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: place-order
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    customerName:
+      type: string
+    total:
+      type: number
+  required:
+    - customerName
+    - total
+publishes:
+  - order-placed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: pay-order
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    paidAmount:
+      type: number
+  required:
+    - id
+    - paidAmount
+publishes:
+  - order-paid
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: ship-order
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - order-shipped
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: cancel-order
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - order-cancelled
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: orders
+scope:
+  domain: orders
+  boundedContext: orders
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    customerName:
+      type: string
+      default: ''
+    total:
+      type: number
+      default: 0
+    paidAmount:
+      type: number
+      default: 0
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - customerName
+    - total
+    - paidAmount
+    - status
+projections:
+  -
+    boundedContext: orders
+    aggregate: order
+    event: order-placed
+    rule: 'Insert a row.'
+  -
+    boundedContext: orders
+    aggregate: order
+    event: order-paid
+    rule: 'Update the row and set status to paid.'
+  -
+    boundedContext: orders
+    aggregate: order
+    event: order-shipped
+    rule: 'Update the row and set status to shipped.'
+  -
+    boundedContext: orders
+    aggregate: order
+    event: order-cancelled
+    rule: 'Update the row and set status to cancelled.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-orders
+scope:
+  domain: orders
+  boundedContext: orders
+readModel: orders
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-order
+scope:
+  domain: orders
+  boundedContext: orders
+readModel: orders
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object

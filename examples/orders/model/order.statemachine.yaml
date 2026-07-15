@@ -1,0 +1,47 @@
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: order-lifecycle
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+initial: placed
+states:
+  -
+    name: placed
+  -
+    name: paid
+  -
+    name: shipped
+    final: true
+  -
+    name: cancelled
+    final: true
+transitions:
+  -
+    'on': order-placed
+    to: placed
+  -
+    'on': order-paid
+    to: paid
+  -
+    'on': order-shipped
+    to: shipped
+  -
+    'on': order-cancelled
+    to: cancelled
+admits:
+  -
+    command: pay-order
+    from:
+      - placed
+  -
+    command: ship-order
+    from:
+      - paid
+    when: 'paidAmount >= total'
+  -
+    command: cancel-order
+    from:
+      - placed
+      - paid

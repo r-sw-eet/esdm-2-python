@@ -1,0 +1,91 @@
+# Given-When-Then behavioral specs for the `order` aggregate (ESDM GWT extension).
+# The generator turns each scenario into an executable Deno test (given events ->
+# when command -> then events / rejection).
+#
+# Unlike the `todo` seed app, this feature deliberately exercises the patterns a
+# richer model has: events whose `status` field is set by the command (not by the
+# scenario), a FEEL-guarded transition (`paidAmount >= total`), and state-machine
+# `from` guards. The `then` events intentionally OMIT the codegen-set `status`
+# field - the emitted assertion must subset-match the declared fields, never
+# over-assert the undeclared `status` to `null`. This is the regression guard for
+# the scenario-test emitter.
+apiVersion: schema.esdm.io/given-when-then/v1
+kind: feature
+name: order-lifecycle
+scope:
+  domain: orders
+  boundedContext: orders
+  aggregate: order
+scenarios:
+  - name: place-an-order
+    when:
+      command: place-order
+      data: { customerName: "Ada Lovelace", total: 100 }
+    then:
+      events:
+        # status (default 'placed') is set by the command, not declared here.
+        - event: order-placed
+          data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", customerName: "Ada Lovelace", total: 100 }
+
+  - name: pay-a-placed-order
+    given:
+      - event: order-placed
+        data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", customerName: "Ada Lovelace", total: 100 }
+    when:
+      command: pay-order
+      data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", paidAmount: 100 }
+    then:
+      events:
+        # status (default 'paid') set by the command - omitted on purpose.
+        - event: order-paid
+          data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", paidAmount: 100 }
+
+  - name: ship-a-fully-paid-order
+    given:
+      - event: order-placed
+        data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", customerName: "Ada Lovelace", total: 100 }
+      - event: order-paid
+        data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", paidAmount: 100 }
+    when:
+      command: ship-order
+      data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1" }
+    then:
+      events:
+        - event: order-shipped
+          data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1" }
+
+  - name: cancel-a-placed-order
+    given:
+      - event: order-placed
+        data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", customerName: "Ada Lovelace", total: 100 }
+    when:
+      command: cancel-order
+      data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1" }
+    then:
+      events:
+        - event: order-cancelled
+          data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1" }
+
+  # State-machine `from` guard: ship-order admits only from `paid`.
+  - name: reject-shipping-an-unpaid-order
+    given:
+      - event: order-placed
+        data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", customerName: "Ada Lovelace", total: 100 }
+    when:
+      command: ship-order
+      data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1" }
+    then:
+      rejection: { reason: an unpaid order cannot ship }
+
+  # FEEL guard: ship-order admits `when paidAmount >= total`; here 50 < 100.
+  - name: reject-shipping-an-underpaid-order
+    given:
+      - event: order-placed
+        data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", customerName: "Ada Lovelace", total: 100 }
+      - event: order-paid
+        data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1", paidAmount: 50 }
+    when:
+      command: ship-order
+      data: { id: "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1" }
+    then:
+      rejection: { reason: an order underpaid below its total cannot ship }
