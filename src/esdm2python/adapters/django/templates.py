@@ -318,6 +318,40 @@ PROJECT_FN = '''def project(app) -> None:
             cursor.last_id = last
             cursor.save(update_fields=["last_id"])'''
 
+REACT_FN = '''def react(app) -> None:
+    with transaction.atomic():
+        cursor, _ = ProjectionPosition.objects.select_for_update().get_or_create(name=POSITION)
+        last = cursor.last_id
+        stalled = False
+        while not stalled:
+            notifications = app.recorder.select_notifications(last + 1, _BATCH)
+            fresh = [n for n in notifications if n.id > last]
+            if not fresh:
+                break
+            for notification in fresh:
+                if not _dispatch(app, app.mapper.to_domain_event(notification)):
+                    # at-least-once: leave the cursor BEFORE the failed event so the
+                    # next request retries it (dedup makes the retry idempotent)
+                    stalled = True
+                    break
+                last = notification.id
+        if last != cursor.last_id:
+            cursor.last_id = last
+            cursor.save(update_fields=["last_id"])'''
+
+REACT_FN_NO_CURSOR = '''def react(app) -> None:
+    # no read models -> no cursor table; rescan and rely on deterministic-id dedup
+    last = 0
+    while True:
+        notifications = app.recorder.select_notifications(last + 1, _BATCH)
+        fresh = [n for n in notifications if n.id > last]
+        if not fresh:
+            break
+        for notification in fresh:
+            if not _dispatch(app, app.mapper.to_domain_event(notification)):
+                return  # retried on the next call
+            last = notification.id'''
+
 VIEWS_HELPERS = '''try:  # exception name differs across eventsourcing releases
     from eventsourcing.application import AggregateNotFound
 except ImportError:  # pragma: no cover
@@ -346,8 +380,7 @@ def _run(app, fn, command):
              "details": {"errorCode": "ILLEGAL_TRANSITION", "command": command}},
             status=409,
         )
-    projections.project(app)
-    return result'''
+%(react)s%(project)s    return result'''
 
 DEV_VIEWS_TAIL = '''_FRAMEWORK_FIELDS = {"originator_id", "originator_version", "originator_topic", "timestamp"}
 _LIMIT = 50
@@ -365,25 +398,39 @@ def events(request):
     app = get_app()
     max_id = app.recorder.max_notification_id() or 0
     rows: list[dict] = []
-    if max_id:
-        start = max(1, max_id - _LIMIT + 1)
-        for notification in app.recorder.select_notifications(start, _LIMIT):
+    end = max_id
+    # walk backwards in chunks: notification ids may have gaps (rolled-back writes),
+    # and the window is "the newest <= _LIMIT rows", not "the newest _LIMIT ids"
+    while end >= 1 and len(rows) < _LIMIT:
+        start = max(1, end - _LIMIT + 1)
+        batch = [n for n in app.recorder.select_notifications(start, end - start + 1) if n.id <= end]
+        for notification in reversed(batch):
             rows.append(_row(app, notification))
-        rows.reverse()  # newest first (0004 §4)
-    return JsonResponse(rows, safe=False)
+            if len(rows) >= _LIMIT:
+                break
+        end = start - 1
+    return JsonResponse(rows, safe=False)  # newest first (0004 §4)
 
 
 def _row(app, notification) -> dict:
     event = app.mapper.to_domain_event(notification)
-    aggregate, name = _EVENTS.get(type(event), (%(fallback)s, type(event).__qualname__))
+    aggregate, name, id_attr = _EVENTS.get(type(event), (%(fallback)s, type(event).__qualname__, None))
     payload = {"id": str(event.originator_id)}
     payload.update(
         {k: _jsonable(v) for k, v in event.__dict__.items() if k not in _FRAMEWORK_FIELDS}
     )
+    aggregate_id = str(notification.originator_id)
+    if id_attr:
+        # the wire identity is the model's own (e.g. a usage keyed by its job's id);
+        # the derived stream id stays store bookkeeping
+        carried = payload.pop(id_attr, "")
+        if carried:
+            payload["id"] = carried
+            aggregate_id = carried
     return {
         "id": str(notification.id),
         "aggregate": aggregate,
-        "aggregate_id": str(notification.originator_id),
+        "aggregate_id": aggregate_id,
         "playhead": notification.originator_version,
         "event": name,
         "payload": payload,

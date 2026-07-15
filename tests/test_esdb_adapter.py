@@ -161,3 +161,127 @@ def test_policy_emission():
     observe = files["shared/management/commands/observe.py"]
     assert '("reopen-on-delete", "/task", policies.reopen_on_delete_policy),' in observe
     assert "import policies" in observe
+
+
+# --- caller-supplied identity + policy id derivation (metering mini model) ---
+
+_CORE = "schema.esdm.io/core/v1"
+
+
+def _metering_documents() -> list[dict]:
+    """Two contexts: `jobs` (primary, minted-identity source aggregate) and `billing`
+    (caller-identity `usage` aggregate + read model), wired by one metering policy."""
+    def scope(**kw):
+        return {"domain": "metering", **kw}
+
+    id_duration = {
+        "type": "object",
+        "properties": {"id": {"type": "string"}, "durationSeconds": {"type": "integer"}},
+        "required": ["id", "durationSeconds"],
+    }
+    return [
+        {"apiVersion": _CORE, "kind": "domain", "name": "metering"},
+        {"apiVersion": _CORE, "kind": "bounded-context", "name": "jobs", "scope": scope()},
+        {"apiVersion": _CORE, "kind": "bounded-context", "name": "billing", "scope": scope()},
+        {
+            "apiVersion": _CORE, "kind": "aggregate", "name": "job",
+            "scope": scope(boundedContext="jobs"),
+            "identifiedBy": {"source": "state", "field": "id"},
+            "state": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "durationSeconds": {"type": "integer", "default": 0}},
+                "required": ["id"],
+            },
+        },
+        {
+            "apiVersion": _CORE, "kind": "event", "name": "job-started",
+            "scope": scope(boundedContext="jobs", aggregate="job"),
+            "data": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+        },
+        {
+            "apiVersion": _CORE, "kind": "event", "name": "job-finished",
+            "scope": scope(boundedContext="jobs", aggregate="job"),
+            "data": id_duration,
+        },
+        {
+            "apiVersion": _CORE, "kind": "command", "name": "start-job",
+            "scope": scope(boundedContext="jobs", aggregate="job"),
+            "publishes": ["job-started"],
+        },
+        {
+            "apiVersion": _CORE, "kind": "command", "name": "finish-job",
+            "scope": scope(boundedContext="jobs", aggregate="job"),
+            "data": id_duration,
+            "publishes": ["job-finished"],
+        },
+        {
+            "apiVersion": _CORE, "kind": "aggregate", "name": "usage",
+            "scope": scope(boundedContext="billing"),
+            "identifiedBy": {"source": "state", "field": "id"},
+            "state": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "durationSeconds": {"type": "integer", "default": 0}},
+                "required": ["id", "durationSeconds"],
+            },
+        },
+        {
+            "apiVersion": _CORE, "kind": "event", "name": "usage-recorded",
+            "scope": scope(boundedContext="billing", aggregate="usage"),
+            "data": id_duration,
+        },
+        {
+            # `record` is no create-verb, so pin create; declaring `id` in the data
+            # makes the identity caller-supplied (usage.id = the source job's id)
+            "apiVersion": _CORE, "kind": "command", "name": "record-usage",
+            "metadata": {"annotations": {"esdm-extensions.io/lifecycle": "create"}},
+            "scope": scope(boundedContext="billing", aggregate="usage"),
+            "data": id_duration,
+            "publishes": ["usage-recorded"],
+        },
+        {
+            "apiVersion": _CORE, "kind": "read-model", "name": "usages",
+            "scope": scope(boundedContext="billing"),
+            "paradigm": "tabular",
+            "schema": id_duration,
+            "projections": [{
+                "boundedContext": "billing", "aggregate": "usage",
+                "event": "usage-recorded",
+                "rule": "Insert a row with id and durationSeconds.",
+            }],
+        },
+        {
+            "apiVersion": _CORE, "kind": "query", "name": "list-usages",
+            "scope": scope(boundedContext="billing"),
+            "readModel": "usages",
+            "result": {"type": "array", "items": {"type": "object"}},
+        },
+        {
+            "apiVersion": _CORE, "kind": "policy", "name": "meter-finished-job",
+            "scope": scope(),
+            "handles": [{"boundedContext": "jobs", "aggregate": "job", "event": "job-finished"}],
+            "emits": [{"boundedContext": "billing", "aggregate": "usage", "command": "record-usage"}],
+        },
+    ]
+
+
+def test_caller_identity_create_service_and_policy_source_id():
+    model = create_model(_metering_documents())
+    files = DjangoEventSourcingDbAdapter().generate(model, {}).files()
+
+    app = files["jobs/application.py"]  # primary context hosts the service
+    # caller-supplied identity: use it, mint only when empty — no esdm_id indirection
+    # here, the subject key IS the model identity
+    assert "def record_usage(self, id: str, duration_seconds: int) -> str:" in app
+    assert "usage = billing_domain.UsageState(id=id or str(uuid4()))" in app
+    assert 'esdb.append(events, f"{billing_domain.SUBJECT_ROOT}/{usage.id}", pristine=True)' in app
+    assert "esdm_id" not in app
+    # a minted-identity create stays plain uuid4
+    assert "job = jobs_domain.JobState(id=str(uuid4()))" in app
+
+    policies = files["policies.py"]
+    # the source event's id is the FIRST arg of the create-emitting policy command
+    assert "def meter_finished_job_policy(event) -> None:" in policies
+    assert (
+        'get_app().record_usage(str(data.get("id", "")), int(data.get("durationSeconds", 0)))'
+        in policies
+    )

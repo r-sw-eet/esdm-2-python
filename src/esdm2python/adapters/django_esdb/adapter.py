@@ -17,7 +17,7 @@ from ...names import camel, snake, studly, upper_const
 from ...project import GeneratedProject
 from ..django import templates as base_t
 from ..django.adapter import DjangoEventSourcingAdapter, _file, _py_literal
-from ..django.types import coerce_payload, default_literal, py_type, zero_literal
+from ..django.types import coerce_payload, dataclass_default, default_literal, is_mutable_default, py_type, zero_literal
 from . import templates as t
 
 
@@ -81,8 +81,8 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         for context in model.bounded_contexts:
             project.add(f"{context.name}/__init__.py", "")
             project.add(f"{context.name}/apps.py", self._apps(context))
-            for aggregate in context.aggregates:
-                project.add(f"{context.name}/domain.py", self._domain(aggregate))
+            if context.aggregates:
+                project.add(f"{context.name}/domain.py", self._domain(context.aggregates))
             if context.read_models:
                 project.add(f"{context.name}/projections.py", self._projections(context))
                 project.add(f"{context.name}/finders.py", self._finders(context))
@@ -134,11 +134,35 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
 
     # -- write side: pure decide/evolve -------------------------------------------
 
-    def _domain(self, agg: Aggregate) -> str:
-        cls = self._state_class(agg)
-        sm = agg.state_machine
+    # module-level names are per-aggregate when a context has several aggregates
+    # (their domain.py is shared), and stay plain for a single-aggregate context.
+    def _subject_root_const(self, agg: Aggregate, single: bool) -> str:
+        return "SUBJECT_ROOT" if single else f"{upper_const(agg.name)}_SUBJECT_ROOT"
+
+    def _apply_fn(self, agg: Aggregate, single: bool) -> str:
+        return "apply_event" if single else f"apply_{snake(agg.name)}_event"
+
+    def _admit_name(self, agg: Aggregate, single: bool) -> str:
+        return "_admit" if single else f"_admit_{snake(agg.name)}"
+
+    def _admits_const(self, agg: Aggregate, single: bool) -> str:
+        return "_ADMITS" if single else f"_ADMITS_{upper_const(agg.name)}"
+
+    def _single_aggregate(self, model: Model, agg: Aggregate) -> bool:
+        context = next((c for c in model.bounded_contexts if c.name == agg.bounded_context), None)
+        return context is None or len(context.aggregates) == 1
+
+    def _domain(self, aggregates: list[Aggregate]) -> str:
+        # One module per bounded context: shared header/imports once, then every
+        # aggregate's block (event consts, subject root, state, decide/evolve).
+        single = len(aggregates) == 1
+        subject = (
+            f"`{aggregates[0].name}` aggregate"
+            if single
+            else f"`{aggregates[0].bounded_context}` context"
+        )
         lines = [
-            f'"""Write model for the `{agg.name}` aggregate — pure decide/evolve.',
+            f'"""Write model for the {subject} — pure decide/evolve.',
             "",
             "The command functions *decide* (admit against the 0001 state machine, then",
             "return new events); `apply_event` *evolves* (folds an event into the immutable",
@@ -147,21 +171,33 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
             "",
             "from __future__ import annotations",
             "",
-            "from dataclasses import dataclass, replace",
-            "",
         ]
+        needs_field = any(
+            is_mutable_default(state_field)
+            for aggregate in aggregates
+            for state_field in aggregate.non_identity_state()
+        )
+        imports = "dataclass, field, replace" if needs_field else "dataclass, replace"
+        lines += [f"from dataclasses import {imports}", ""]
         err = []
-        if sm is not None:
+        if any(a.state_machine is not None for a in aggregates):
             err.append("IllegalTransition")
-        if any(self._guard_expr(agg, c) for c in agg.commands):
+        if any(self._guard_expr(a, c) for a in aggregates for c in a.commands):
             err.append("GuardViolation")
         if err:
             lines.append(f"from shared.errors import {', '.join(err)}")
         lines.append("from shared.events import DomainEvent")
-        lines.append("")
-        for event in agg.events:
-            lines.append(f'{self._event_const(event)} = "{event.type}"')
-        lines += ["", f'SUBJECT_ROOT = "{self._subject_root(agg)}"']
+
+        for index, aggregate in enumerate(aggregates):
+            lines += [""] if index == 0 else ["", ""]
+            lines += self._domain_block(aggregate, single)
+        return _file(lines)
+
+    def _domain_block(self, agg: Aggregate, single: bool) -> list[str]:
+        cls = self._state_class(agg)
+        sm = agg.state_machine
+        lines = [f'{self._event_const(event)} = "{event.type}"' for event in agg.events]
+        lines += ["", f'{self._subject_root_const(agg, single)} = "{self._subject_root(agg)}"']
 
         lines += ["", "", "@dataclass(frozen=True)", f"class {cls}:"]
         if sm is not None:
@@ -169,12 +205,13 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
                 lines.append(f'    {upper_const(state.name)} = "{state.name}"')
             lines.append("")
         lines.append(f"    {snake(agg.identity_field)}: str")
-        for field in agg.non_identity_state():
-            lines.append(f"    {snake(field.name)}: {py_type(field)} = {default_literal(field)}")
+        for state_field in agg.non_identity_state():
+            lines.append(f"    {snake(state_field.name)}: {py_type(state_field)} = {dataclass_default(state_field)}")
         if sm is not None:
             lines.append("    status: str | None = None")
 
-        lines += ["", "", f"def apply_event(state: {cls}, event: DomainEvent) -> {cls}:"]
+        apply_fn = self._apply_fn(agg, single)
+        lines += ["", "", f"def {apply_fn}(state: {cls}, event: DomainEvent) -> {cls}:"]
         lines.append("    data = event.data")
         for event in agg.events:
             lines += self._fold_branch(agg, event)
@@ -185,10 +222,10 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
             event = agg.event(cmd.primary_event() or "")
             if event is None:
                 continue
-            lines += ["", ""] + self._decider(agg, cmd, event, cmd is create)
+            lines += ["", ""] + self._decider(agg, cmd, event, cmd is create, single)
         if sm is not None:
-            lines += ["", ""] + self._admit_fn(agg)
-        return _file(lines)
+            lines += ["", ""] + self._admit_fn(agg, single)
+        return lines
 
     def _fold_branch(self, agg: Aggregate, event: Event) -> list[str]:
         cls = self._state_class(agg)
@@ -227,13 +264,13 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         lines.append("        )")
         return lines
 
-    def _decider(self, agg: Aggregate, cmd: Command, event: Event, is_create: bool) -> list[str]:
+    def _decider(self, agg: Aggregate, cmd: Command, event: Event, is_create: bool, single: bool) -> list[str]:
         cls = self._state_class(agg)
         params = "".join(f", {snake(f.name)}: {py_type(f)}" for f in cmd.data if not f.is_identity)
         lines = [f"def {snake(cmd.name)}(state: {cls}{params}) -> list[DomainEvent]:"]
         sm = agg.state_machine
         if not is_create and sm is not None and sm.admit_for(cmd.name) is not None:
-            lines.append(f'    _admit("{cmd.name}", state)')
+            lines.append(f'    {self._admit_name(agg, single)}("{cmd.name}", state)')
         guard = self._guard_expr(agg, cmd)
         if not is_create and guard is not None:
             expr, requirement, prelude = guard
@@ -264,23 +301,25 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         lines.append("    ]")
         return lines
 
-    def _admit_fn(self, agg: Aggregate) -> list[str]:
+    def _admit_fn(self, agg: Aggregate, single: bool) -> list[str]:
         # Per-command from-states: the union of all admitting states would wrongly
         # admit command A from a state only command B allows (C4: orders scenario).
         cls = self._state_class(agg)
+        admits_const = self._admits_const(agg, single)
+        admit_name = self._admit_name(agg, single)
         entries = []
         for admit in agg.state_machine.admits:
             rendered = ", ".join(f"{cls}.{upper_const(s)}" for s in admit.from_states)
             trailing = "," if len(admit.from_states) == 1 else ""
             entries.append(f'    "{admit.command}": ({rendered}{trailing}),')
         return [
-            "_ADMITS = {",
+            f"{admits_const} = {{",
             *entries,
             "}",
             "",
             "",
-            f"def _admit(command: str, state: {cls}) -> None:",
-            "    if state.status not in _ADMITS[command]:",
+            f"def {admit_name}(command: str, state: {cls}) -> None:",
+            f"    if state.status not in {admits_const}[command]:",
             "        raise IllegalTransition(command, state.status)",
         ]
 
@@ -316,18 +355,19 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         loaders: list[list[str]] = []
         for aggregate in aggregates:
             ref = refs[aggregate.bounded_context]
+            single = self._single_aggregate(model, aggregate)
             create = aggregate.create_command()
             needs_loader = False
             for cmd in aggregate.commands:
                 if aggregate.event(cmd.primary_event() or "") is None:
                     continue
                 if cmd is create:
-                    blocks.append(self._create_service(aggregate, cmd, ref))
+                    blocks.append(self._create_service(aggregate, cmd, ref, single))
                 else:
-                    blocks.append(self._mutate_service(aggregate, cmd, ref))
+                    blocks.append(self._mutate_service(aggregate, cmd, ref, single))
                     needs_loader = True
             if needs_loader:
-                loaders.append(self._loader(aggregate, ref))
+                loaders.append(self._loader(aggregate, ref, single))
 
         body: list[str] = []
         for index, block in enumerate(blocks + loaders):
@@ -336,24 +376,34 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
             body += block
         return _file(lines + body)
 
-    def _create_service(self, agg: Aggregate, cmd: Command, ref: str) -> list[str]:
+    def _create_service(self, agg: Aggregate, cmd: Command, ref: str, single: bool) -> list[str]:
         cls = self._state_class(agg)
         var = snake(agg.name)
         id_attr = snake(agg.identity_field)
-        params = "".join(f", {snake(f.name)}: {py_type(f)}" for f in cmd.data if not f.is_identity)
+        subject_ref = f"{ref}.{self._subject_root_const(agg, single)}"
+        # Caller-supplied identity: use it and only mint when empty. Distinct subjects per
+        # aggregate keep job/id and usage/id apart, so sharing an id is safe and makes
+        # redelivery idempotent (isSubjectPristine rejects the duplicate).
+        carries_id = self._carries_identity(agg)
+        params = "".join(
+            f", {id_attr}: str" if f.is_identity else f", {snake(f.name)}: {py_type(f)}"
+            for f in cmd.data
+        )
         args = "".join(f", {snake(f.name)}" for f in cmd.data if not f.is_identity)
+        id_expr = f"{id_attr} or str(uuid4())" if carries_id else "str(uuid4())"
         return [
             f"    def {snake(cmd.name)}(self{params}) -> str:",
-            f"        {var} = {ref}.{cls}({id_attr}=str(uuid4()))",
+            f"        {var} = {ref}.{cls}({id_attr}={id_expr})",
             f"        events = {ref}.{snake(cmd.name)}({var}{args})",
-            f'        esdb.append(events, f"{{{ref}.SUBJECT_ROOT}}/{{{var}.{id_attr}}}", pristine=True)',
+            f'        esdb.append(events, f"{{{subject_ref}}}/{{{var}.{id_attr}}}", pristine=True)',
             f"        return {var}.{id_attr}",
         ]
 
-    def _mutate_service(self, agg: Aggregate, cmd: Command, ref: str) -> list[str]:
+    def _mutate_service(self, agg: Aggregate, cmd: Command, ref: str, single: bool) -> list[str]:
         var = snake(agg.name)
         id_attr = snake(agg.identity_field)
-        id_param = self._id_param(agg.name)
+        id_param = self._load_id_param(agg, cmd)
+        subject_ref = f"{ref}.{self._subject_root_const(agg, single)}"
         params = f", {id_param}: str" + "".join(
             f", {snake(f.name)}: {py_type(f)}" for f in cmd.data if not f.is_identity
         )
@@ -362,20 +412,22 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
             f"    def {snake(cmd.name)}(self{params}) -> None:",
             f"        {var} = self._load_{var}({id_param})",
             f"        events = {ref}.{snake(cmd.name)}({var}{args})",
-            f'        esdb.append(events, f"{{{ref}.SUBJECT_ROOT}}/{{{var}.{id_attr}}}", pristine=False)',
+            f'        esdb.append(events, f"{{{subject_ref}}}/{{{var}.{id_attr}}}", pristine=False)',
         ]
 
-    def _loader(self, agg: Aggregate, ref: str) -> list[str]:
+    def _loader(self, agg: Aggregate, ref: str, single: bool) -> list[str]:
         cls = self._state_class(agg)
         var = snake(agg.name)
         id_attr = snake(agg.identity_field)
         id_param = self._id_param(agg.name)
+        subject_ref = f"{ref}.{self._subject_root_const(agg, single)}"
+        apply_ref = f"{ref}.{self._apply_fn(agg, single)}"
         return [
             f"    def _load_{var}(self, {id_param}: str) -> {ref}.{cls}:",
             f"        {var} = {ref}.{cls}({id_attr}={id_param})",
             "        found = False",
-            f'        for event in esdb.read(f"{{{ref}.SUBJECT_ROOT}}/{{{id_param}}}"):',
-            f"            {var} = {ref}.apply_event({var}, event)",
+            f'        for event in esdb.read(f"{{{subject_ref}}}/{{{id_param}}}"):',
+            f"            {var} = {apply_ref}({var}, event)",
             "            found = True",
             "        if not found:",
             f"            raise AggregateNotFound({id_param})",
@@ -574,18 +626,7 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         return lines
 
     # -- policies -----------------------------------------------------------------
-
-    def _resolvable_policies(self, model: Model) -> list[Policy]:
-        resolved = []
-        for policy in model.policies:
-            handle = model.aggregate(policy.handle_context, policy.handle_aggregate)
-            emit = model.aggregate(policy.emit_context, policy.emit_aggregate)
-            if handle is None or emit is None or handle.event(policy.handle_event) is None:
-                continue
-            if not any(c.name == policy.emit_command for c in emit.commands):
-                continue
-            resolved.append(policy)
-        return resolved
+    # (_resolvable_policies is inherited from the base django adapter)
 
     def _policies_module(self, model: Model) -> str:
         refs = self._domain_refs(model)
@@ -614,14 +655,18 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         ref = refs[policy.handle_context]
         is_create = command is emit.create_command()
 
+        source_id = f'str(data.get("{self._payload_key(handle.identity_field)}", ""))'
         args = []
         if not is_create:
-            args.append(f'str(data.get("{self._payload_key(handle.identity_field)}", ""))')
+            args.append(source_id)
         for field in command.data:
             if field.is_identity:
+                # a policy-minted create inherits the source aggregate's id (usage.id = job.id)
+                if is_create:
+                    args.append(source_id)
                 continue
             if snake(field.name) == snake(f"{policy.handle_aggregate}-id"):
-                args.append(f'str(data.get("{self._payload_key(handle.identity_field)}", ""))')
+                args.append(source_id)
             elif event.data.has(field.name):
                 key = self._payload_key(field.name)
                 args.append(coerce_payload(field, f'data.get("{key}", {zero_literal(field)})'))
@@ -802,6 +847,7 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
 
     def _test(self, model: Model, feature: Feature) -> str:
         aggregate = model.aggregate(feature.bounded_context, feature.aggregate)
+        single = self._single_aggregate(model, aggregate)
         has_rejection = any(s.is_rejection() for s in feature.scenarios)
         lines = [
             '"""Write-side lifecycle tests — the GWT scenarios of the `' + feature.name + "` feature",
@@ -812,17 +858,18 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
             "",
         ]
         if has_rejection:
-            lines += ["import pytest", "", "from shared.errors import IllegalTransition"]
+            lines += ["import pytest", "", "from shared.errors import DomainViolation"]
         lines.append("from shared.events import DomainEvent")
         lines.append(f"from {feature.bounded_context} import domain")
         for scenario in feature.scenarios:
-            lines += ["", ""] + self._scenario(aggregate, scenario)
+            lines += ["", ""] + self._scenario(aggregate, scenario, single)
         return _file(lines)
 
-    def _scenario(self, aggregate: Aggregate, scenario) -> list[str]:
+    def _scenario(self, aggregate: Aggregate, scenario, single: bool = True) -> list[str]:
         cls = self._state_class(aggregate)
         id_attr = snake(aggregate.identity_field)
         scenario_id = self._scenario_identity(aggregate, scenario)
+        apply_fn = self._apply_fn(aggregate, single)
         lines = [
             f"def test_{snake(scenario.name)}():",
             f"    state = domain.{cls}({id_attr}={_py_literal(scenario_id)})",
@@ -832,7 +879,7 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
             if event is None:
                 continue
             lines += [
-                "    state = domain.apply_event(",
+                f"    state = domain.{apply_fn}(",
                 "        state,",
                 f"        DomainEvent(domain.{self._event_const(event)}, "
                 f"{self._data_literal(event.data, example.data)}),",
@@ -841,20 +888,28 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         cmd = next((c for c in aggregate.commands if c.name == scenario.command_name), None)
         call = self._decider_call(aggregate, cmd, scenario.command_data)
         if scenario.is_rejection():
-            lines.append("    with pytest.raises(IllegalTransition):")
+            lines.append("    with pytest.raises(DomainViolation):")
             lines.append(f"        {call}")
             return lines
         lines.append(f"    events = {call}")
-        lines.append("    assert events == [")
+        type_consts = []
+        for example in scenario.then_events:
+            event = aggregate.event(example.event)
+            if event is not None:
+                type_consts.append(f"domain.{self._event_const(event)}")
+        lines.append(f"    assert [e.type for e in events] == [{', '.join(type_consts)}]")
+        index = 0
         for example in scenario.then_events:
             event = aggregate.event(example.event)
             if event is None:
                 continue
-            lines.append(
-                f"        DomainEvent(domain.{self._event_const(event)}, "
-                f"{self._data_literal(event.data, example.data)}),"
-            )
-        lines.append("    ]")
+            declared = self._declared_literal(event.data, example.data)
+            if declared != "{}":
+                lines.append(f"    expected_{index} = {declared}")
+                lines.append(
+                    f"    assert {{k: events[{index}].data[k] for k in expected_{index}}} == expected_{index}"
+                )
+            index += 1
         return lines
 
     def _scenario_identity(self, aggregate: Aggregate, scenario) -> str:
@@ -881,6 +936,16 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         for field in fields:
             value = data.get(field.name, self._zero_value(field))
             parts.append(f'"{self._payload_key(field.name)}": {_py_literal(value)}')
+        return "{" + ", ".join(parts) + "}"
+
+    def _declared_literal(self, fields, data: dict) -> str:
+        # only the scenario-declared fields: subset-match the emitted event so an
+        # undeclared command-set field (e.g. state-machine status) is not forced to a zero.
+        parts = [
+            f'"{self._payload_key(field.name)}": {_py_literal(data[field.name])}'
+            for field in fields
+            if field.name in data
+        ]
         return "{" + ", ".join(parts) + "}"
 
     # -- README --------------------------------------------------------------------

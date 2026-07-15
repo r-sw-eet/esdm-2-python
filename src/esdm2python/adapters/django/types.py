@@ -23,6 +23,22 @@ def default_literal(field: Field) -> str:
     return zero_literal(field)
 
 
+def is_mutable_default(field: Field) -> bool:
+    """A dataclass field defaulting to a mutable container needs a default_factory."""
+    return field.has_default and isinstance(field.default, (list, dict, set))
+
+
+def dataclass_default(field: Field) -> str:
+    """Default expression for a @dataclass field. A bare mutable literal (list/dict/set)
+    is a ValueError at class definition, so route it through default_factory."""
+    if not is_mutable_default(field):
+        return default_literal(field)
+    factory = {list: "list", dict: "dict", set: "set"}[type(field.default)]
+    if not field.default:
+        return f"field(default_factory={factory})"
+    return f"field(default_factory=lambda: {default_literal(field)})"
+
+
 def coerce_payload(field: Field, expr: str) -> str:
     """Wrap an HTTP-payload lookup in the right Python coercion."""
     caster = _PY_TYPE.get(field.json_type)

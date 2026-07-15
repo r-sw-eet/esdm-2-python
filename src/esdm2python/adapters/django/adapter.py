@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from ...model import Aggregate, BoundedContext, Command, Event, Feature, Model, ReadModel
+from ...model import Aggregate, BoundedContext, Command, Event, Feature, Model, Policy, ReadModel
 from ...names import camel, singular, snake, studly, upper_const
 from ...project import GeneratedProject
 from . import templates as t
@@ -63,6 +63,16 @@ class DjangoEventSourcingAdapter:
     def _id_param(self, entity: str) -> str:
         return f"{snake(singular(entity))}_id"
 
+    def _load_id_param(self, agg: Aggregate, cmd: Command) -> str:
+        # The aggregate-id param can collide with a same-named command data field
+        # (e.g. `accountId` on the `account` aggregate -> both snake to `account_id`);
+        # rename the id param so the field keeps its own value and the signature stays valid.
+        id_param = self._id_param(agg.name)
+        taken = {snake(f.name) for f in cmd.data if not f.is_identity}
+        while id_param in taken:
+            id_param = "aggregate_id" if id_param != "aggregate_id" else id_param + "_"
+        return id_param
+
     def _rm_class(self, rm: ReadModel) -> str:
         return "Rm" + singular(studly(rm.name))
 
@@ -81,12 +91,13 @@ class DjangoEventSourcingAdapter:
         options = options or {}
         project = GeneratedProject()
         primary = next((c for c in model.bounded_contexts if c.aggregates), None)
+        has_policies = bool(self._resolvable_policies(model))
 
         for context in model.bounded_contexts:
             project.add(f"{context.name}/__init__.py", "")
             project.add(f"{context.name}/apps.py", self._apps(context))
-            for aggregate in context.aggregates:
-                project.add(f"{context.name}/domain.py", self._domain(aggregate))
+            if context.aggregates:
+                project.add(f"{context.name}/domain.py", self._domain(context.aggregates))
             if context.read_models:
                 project.add(f"{context.name}/models.py", self._models(context))
                 project.add(f"{context.name}/migrations/__init__.py", "")
@@ -95,7 +106,7 @@ class DjangoEventSourcingAdapter:
                 project.add(f"{context.name}/finders.py", self._finders(context))
             if context.aggregates or context.queries:
                 project.add(f"{context.name}/urls.py", self._urls(context))
-                project.add(f"{context.name}/views.py", self._views(context))
+                project.add(f"{context.name}/views.py", self._views(context, react=has_policies))
 
         if primary is not None:
             project.add(f"{primary.name}/application.py", self._application(model))
@@ -109,6 +120,8 @@ class DjangoEventSourcingAdapter:
         project.add("shared/errors.py", t.ERRORS)
         project.add("shared/cors.py", t.CORS)
         project.add("shared/runtime.py", self._runtime(model, primary))
+        if has_policies:
+            project.add("shared/reactions.py", self._reactions(model))
         project.add("shared/management/__init__.py", "")
         project.add("shared/management/commands/__init__.py", "")
         project.add("shared/management/commands/eventstore_hashchain.py", t.HASHCHAIN_COMMAND)
@@ -137,11 +150,16 @@ class DjangoEventSourcingAdapter:
 
     # -- write side ----------------------------------------------------------
 
-    def _domain(self, agg: Aggregate) -> str:
-        cls = studly(agg.name)
-        sm = agg.state_machine
+    def _domain(self, aggregates: list[Aggregate]) -> str:
+        # One module per bounded context: shared header/imports once, then every
+        # aggregate's class (a context with >1 aggregate keeps them all).
+        subject = (
+            f"`{aggregates[0].name}` aggregate"
+            if len(aggregates) == 1
+            else f"`{aggregates[0].bounded_context}` context"
+        )
         lines = [
-            f'"""Write model for the `{agg.name}` aggregate.',
+            f'"""Write model for the {subject}.',
             "",
             "Decide/evolve are kept apart, exactly as the ESDM model separates them: the",
             "public command methods *decide* (admit against the 0001 state machine, then",
@@ -154,14 +172,49 @@ class DjangoEventSourcingAdapter:
             "from eventsourcing.domain import Aggregate, event",
         ]
         err = []
-        if sm is not None:
+        if any(a.state_machine is not None for a in aggregates):
             err.append("IllegalTransition")
-        if any(self._guard_expr(agg, c) for c in agg.commands):
+        if any(self._guard_expr(a, c) for a in aggregates for c in a.commands):
             err.append("GuardViolation")
         if err:
             lines += ["", f"from shared.errors import {', '.join(err)}"]
-        lines += ["", "", f"class {cls}(Aggregate):"]
+        if any(self._carries_identity(a) for a in aggregates):
+            lines += ["", "from uuid import NAMESPACE_URL, UUID, uuid4, uuid5"]
 
+        body: list[str] = []
+        for aggregate in aggregates:
+            if self._carries_identity(aggregate):
+                body += ["", "", self._identity_namespace(aggregate)]
+            body += ["", ""] + self._domain_class(aggregate)
+        return _file(lines + body)
+
+    def _carries_identity(self, agg: Aggregate) -> bool:
+        # A create whose command declares the identity field is caller-supplied (a
+        # policy passes through its source aggregate's id, or app code composes one).
+        create = agg.create_command()
+        return create is not None and create.data.has(agg.identity_field)
+
+    def _identity_namespace(self, agg: Aggregate) -> str:
+        const = f"_{upper_const(agg.name)}_NS"
+        return f'{const} = uuid5(NAMESPACE_URL, "{agg.bounded_context}/{agg.name}")'
+
+    def _identity_param_name(self, agg: Aggregate) -> str:
+        # the reserved carried-identity param must not collide with a model field
+        # that also snakes to esdm_id (duplicate ctor argument = SyntaxError)
+        taken = {snake(f.name) for f in agg.non_identity_state()}
+        create = agg.create_command()
+        if create is not None:
+            taken |= {snake(f.name) for f in create.data}
+        for event in agg.events:
+            taken |= {snake(f.name) for f in event.data}
+        name = "esdm_id"
+        while name in taken:
+            name += "_"
+        return name
+
+    def _domain_class(self, agg: Aggregate) -> list[str]:
+        cls = studly(agg.name)
+        sm = agg.state_machine
         parts: list[list[str]] = []
         if sm is not None:
             parts.append([f'    {upper_const(state.name)} = "{state.name}"' for state in sm.states])
@@ -179,12 +232,12 @@ class DjangoEventSourcingAdapter:
         if sm is not None:
             parts.append(self._admit(agg))
 
-        body: list[str] = []
+        body: list[str] = [f"class {cls}(Aggregate):"]
         for index, part in enumerate(parts):
             if index > 0:
                 body.append("")
             body += part
-        return _file(lines + body)
+        return body
 
     def _ctor(self, agg: Aggregate, cmd: Command, event: Event) -> list[str]:
         # __init__ is called with the CREATE COMMAND's fields; event-only fields
@@ -201,14 +254,33 @@ class DjangoEventSourcingAdapter:
             else f", {snake(f.name)}: {py_type(f)} = {default_literal(f)}"
             for f in create_fields
         )
+        carries_id = self._carries_identity(agg)
+        id_param = self._identity_param_name(agg)
+        if carries_id:
+            params += f', {id_param}: str = ""'
         lines = [f'    @event("{self._event_domain(event, agg)}")', f"    def __init__(self{params}) -> None:"]
         carried = {f.name for f in create_fields}
+        body: list[str] = []
         for field in agg.non_identity_state():
             value = snake(field.name) if field.name in carried else default_literal(field)
-            lines.append(f"        self.{snake(field.name)} = {value}")
+            body.append(f"        self.{snake(field.name)} = {value}")
+        if carries_id:
+            body.append(f"        self.{id_param} = {id_param}")
         if agg.state_machine is not None:
-            lines.append(f"        self.status = self.{upper_const(agg.state_machine.initial)}")
-        return lines
+            body.append(f"        self.status = self.{upper_const(agg.state_machine.initial)}")
+        if not body:
+            body.append("        pass")  # identity-only state carries nothing, but @event still records the params
+        if carries_id:
+            # streams are keyed by originator UUID alone, so the model identity (any string,
+            # possibly another aggregate's id) maps to a derived stream id; equal identity ->
+            # equal stream -> a redelivered create dedups on save (IntegrityError).
+            body += [
+                "",
+                "    @classmethod",
+                f'    def create_id(cls, {id_param}: str = "", **_) -> UUID:',
+                f"        return uuid5(_{upper_const(agg.name)}_NS, {id_param}) if {id_param} else uuid4()",
+            ]
+        return lines + body
 
     def _command_method(self, agg: Aggregate, cmd: Command, event: Event) -> list[str]:
         method = self._agg_method(cmd, agg)
@@ -235,6 +307,9 @@ class DjangoEventSourcingAdapter:
                 from_state.append(field.name)
             else:
                 args.append(default_literal(field))
+        if self._carries_identity(agg):
+            # mutate events carry the model identity too, so folds key rows by it
+            args.append(f"self.{self._identity_param_name(agg)}")
         if from_state:
             lines.append(f"        # carry current {', '.join(from_state)} into the event")
         lines.append(f"        self.{self._evolve_method(event, agg)}({', '.join(args)})")
@@ -242,6 +317,8 @@ class DjangoEventSourcingAdapter:
 
     def _evolve(self, agg: Aggregate, event: Event) -> list[str]:
         params = "".join(f", {snake(f.name)}: {py_type(f)}" for f in event.data if not f.is_identity)
+        if self._carries_identity(agg):
+            params += f', {self._identity_param_name(agg)}: str = ""'
         lines = [
             f'    @event("{self._event_domain(event, agg)}")',
             f"    def {self._evolve_method(event, agg)}(self{params}) -> None:",
@@ -296,7 +373,13 @@ class DjangoEventSourcingAdapter:
     def _application(self, model: Model) -> str:
         app_class = self._app_class(model)
         aggregates = model.aggregates()
-        has_mutation = any(c is not a.create_command() for a in aggregates for c in a.commands)
+        # UUID() appears only in loads of minted-identity streams; carried-identity
+        # mutates resolve through create_id instead
+        has_mutation = any(
+            c is not a.create_command() and not self._carries_identity(a)
+            for a in aggregates
+            for c in a.commands
+        )
         lines = [
             f'"""Application service for the `{model.domain}` domain.',
             "",
@@ -333,22 +416,43 @@ class DjangoEventSourcingAdapter:
         var = snake(agg.name)
         method = snake(cmd.name)
         if is_create:
-            params = "".join(f", {snake(f.name)}: {py_type(f)}" for f in cmd.data if not f.is_identity)
+            carries_id = self._carries_identity(agg)
+            params = "".join(
+                f", {snake(f.name)}: {py_type(f)}"
+                for f in cmd.data
+                if carries_id or not f.is_identity
+            )
             args = ", ".join(snake(f.name) for f in cmd.data if not f.is_identity)
+            if carries_id:
+                id_attr = snake(agg.identity_field)
+                id_kw = self._identity_param_name(agg)
+                call = f"{cls}({args}, {id_kw}={id_attr})" if args else f"{cls}({id_kw}={id_attr})"
+                return [
+                    f"    def {method}(self{params}) -> str:",
+                    f"        {var} = {call}",
+                    f"        self.save({var})",
+                    f"        return {id_attr} or str({var}.id)",
+                ]
             return [
                 f"    def {method}(self{params}) -> str:",
                 f"        {var} = {cls}({args})",
                 f"        self.save({var})",
                 f"        return str({var}.id)",
             ]
-        id_param = self._id_param(agg.name)
+        id_param = self._load_id_param(agg, cmd)
         params = f", {id_param}: str" + "".join(
             f", {snake(f.name)}: {py_type(f)}" for f in cmd.data if not f.is_identity
         )
         args = ", ".join(snake(f.name) for f in cmd.data if not f.is_identity)
+        if self._carries_identity(agg):
+            # carried-identity streams are keyed by create_id(model id), never the raw
+            # UUID form - and the model id may not be a UUID at all (composed ids)
+            load = f"{cls}.create_id({self._identity_param_name(agg)}={id_param})"
+        else:
+            load = f"UUID({id_param})"
         return [
             f"    def {method}(self{params}) -> None:",
-            f"        {var}: {cls} = self.repository.get(UUID({id_param}))",
+            f"        {var}: {cls} = self.repository.get({load})",
             f"        {var}.{self._agg_method(cmd, agg)}({args})",
             f"        self.save({var})",
         ]
@@ -381,7 +485,7 @@ class DjangoEventSourcingAdapter:
             "    last_id = models.BigIntegerField(default=0)",
             "",
             "    class Meta:",
-            '        db_table = "projection_position"',
+            f'        db_table = "{context.name}_projection_position"',
         ]
         return _file(lines)
 
@@ -417,7 +521,7 @@ class DjangoEventSourcingAdapter:
             '                ("name", models.CharField(max_length=255, primary_key=True, serialize=False)),',
             '                ("last_id", models.BigIntegerField(default=0)),',
             "            ],",
-            '            options={"db_table": "projection_position"},',
+            f'            options={{"db_table": "{context.name}_projection_position"}},',
             "        ),",
             "    ]",
         ]
@@ -478,39 +582,54 @@ class DjangoEventSourcingAdapter:
             if index == 0:
                 lines.append("")
             lines.append(f"    {keyword} isinstance(event, {self._event_ref(event, aggregate)}):")
+            if self._carries_identity(aggregate):
+                # the row is keyed by the model identity, not the derived stream id;
+                # getattr keeps replays of pre-carried-identity history working
+                id_param = self._identity_param_name(aggregate)
+                lines.append(f'        {id_var} = getattr(event, "{id_param}", "") or {id_var}')
             for rm in context.read_models:
                 projection = next((p for p in rm.projections if p.event == event.name), None)
                 if projection is None:
                     continue
-                lines += self._fold_op(rm, event, projection, id_var)
+                lines += self._fold_op(rm, aggregate, event, projection, id_var)
         return lines
 
-    def _fold_op(self, rm: ReadModel, event: Event, projection, id_var: str) -> list[str]:
+    def _fold_op(self, rm: ReadModel, agg: Aggregate, event: Event, projection, id_var: str) -> list[str]:
         cls = self._rm_class(rm)
         pk = rm.primary_key()
         op = (projection.rule or "").strip().split(" ")[0].lower() if projection.rule else event.lifecycle.value
         op = {"insert": "insert", "update": "update", "delete": "delete", "create": "insert", "mutate": "update"}.get(op, "update")
-        carried = {f.name for f in event.data}
+        # the identity never rides as an event attribute (it IS the stream/id_var);
+        # a same-named non-pk column maps to id_var, not to a phantom event.<id>
+        carried = {f.name for f in event.data if not f.is_identity}
+
+        def column_value(column) -> str:
+            if column.name == agg.identity_field:
+                return id_var
+            if column.name in carried:
+                return f"event.{snake(column.name)}"
+            return default_literal(column)
+
+        key = id_var if pk == agg.identity_field or pk not in carried else f"event.{snake(pk)}"
         if op == "delete":
-            return [f"        {cls}.objects.filter({pk}={id_var}).delete()"]
+            return [f"        {cls}.objects.filter({snake(pk)}={key}).delete()"]
         if op == "insert":
-            defaults = []
-            for column in rm.columns:
-                if column.name == pk:
-                    continue
-                value = f"event.{snake(column.name)}" if column.name in carried else default_literal(column)
-                defaults.append(f'"{snake(column.name)}": {value}')
+            defaults = [
+                f'"{snake(column.name)}": {column_value(column)}'
+                for column in rm.columns
+                if column.name != pk
+            ]
             return [
                 f"        {cls}.objects.update_or_create(",
-                f"            {pk}={id_var}, defaults={{{', '.join(defaults)}}}",
+                f"            {snake(pk)}={key}, defaults={{{', '.join(defaults)}}}",
                 "        )",
             ]
-        assigns = []
-        for column in rm.columns:
-            if column.name == pk or column.name not in carried:
-                continue
-            assigns.append(f"{snake(column.name)}=event.{snake(column.name)}")
-        return [f"        {cls}.objects.filter({pk}={id_var}).update({', '.join(assigns)})"]
+        assigns = [
+            f"{snake(column.name)}={column_value(column)}"
+            for column in rm.columns
+            if column.name != pk and (column.name in carried or column.name == agg.identity_field)
+        ]
+        return [f"        {cls}.objects.filter({snake(pk)}={key}).update({', '.join(assigns)})"]
 
     def _finders(self, context: BoundedContext) -> str:
         used = sorted({self._rm_class(context.read_model(q.read_model)) for q in context.queries if context.read_model(q.read_model)})
@@ -556,7 +675,7 @@ class DjangoEventSourcingAdapter:
 
     # -- HTTP edge -----------------------------------------------------------
 
-    def _views(self, context: BoundedContext) -> str:
+    def _views(self, context: BoundedContext, react: bool = False) -> str:
         lines = [
             '"""HTTP edge for the `' + context.name + "` context — the uniform domain surface (0004 §1).",
             "",
@@ -577,9 +696,13 @@ class DjangoEventSourcingAdapter:
             "",
             "from shared.errors import DomainViolation",
             "from shared.runtime import get_app",
-            f"from {context.name} import finders, projections",
+            *(["from shared import reactions"] if react else []),
+            *([f"from {context.name} import finders, projections"] if context.read_models else []),
             "",
-            t.VIEWS_HELPERS,
+            t.VIEWS_HELPERS % {
+                "react": "    reactions.react(app)\n" if react else "",
+                "project": "    projections.project(app)\n" if context.read_models else "",
+            },
             "",
             "",
             "# --- commands -------------------------------------------------------------",
@@ -662,6 +785,122 @@ class DjangoEventSourcingAdapter:
         ])
 
     # -- project-level files -------------------------------------------------
+
+    # -- policies --------------------------------------------------------------
+
+    def _resolvable_policies(self, model: Model) -> list[Policy]:
+        resolved = []
+        for policy in model.policies:
+            handle = model.aggregate(policy.handle_context, policy.handle_aggregate)
+            emit = model.aggregate(policy.emit_context, policy.emit_aggregate)
+            if handle is None or emit is None or handle.event(policy.handle_event) is None:
+                continue
+            if not any(c.name == policy.emit_command for c in emit.commands):
+                continue
+            resolved.append(policy)
+        return resolved
+
+    def _reactions(self, model: Model) -> str:
+        policies = self._resolvable_policies(model)
+        anchor = next((c.name for c in model.bounded_contexts if c.read_models), None)
+        if anchor is None:
+            # without a cursor table, every react() rescans the log; that is only safe
+            # when redelivery dedups - i.e. every emitted create carries its identity
+            for policy in policies:
+                emit = model.aggregate(policy.emit_context, policy.emit_aggregate)
+                if not self._carries_identity(emit):
+                    raise ValueError(
+                        f"policy '{policy.name}' emits '{policy.emit_command}' whose create does not "
+                        f"carry the aggregate identity, and the model has no read models to anchor a "
+                        f"reaction cursor - redelivery would duplicate aggregates. Add a read model or "
+                        f"declare the identity field in the command data."
+                    )
+        handle_imports = sorted({(p.handle_context, studly(p.handle_aggregate)) for p in policies})
+        lines = [
+            f'"""Policy reactor for the `{model.domain}` domain.',
+            "",
+            "Pull-based and synchronous, like the read-side projector: after every command",
+            "the HTTP edge calls `react(app)`, which walks the notification log from its own",
+            "cursor and dispatches each policy's follow-up command. At-least-once: a failed",
+            "dispatch leaves the cursor BEFORE its event, so the next request retries it;",
+            'a redelivered event dedups on the emitted aggregate\'s deterministic id."""',
+            "",
+            "from __future__ import annotations",
+            "",
+            "from django.db import transaction",
+            "from eventsourcing.persistence import IntegrityError",
+            "",
+        ]
+        if anchor is not None:
+            lines.append(f"from {anchor}.models import ProjectionPosition")
+        for context, cls in handle_imports:
+            lines.append(f"from {context}.domain import {cls}")
+        lines += [
+            "",
+            *(['POSITION = "__reactions__"'] if anchor is not None else []),
+            "_BATCH = 100",
+            "",
+            "",
+            t.REACT_FN if anchor is not None else t.REACT_FN_NO_CURSOR,
+            "",
+            "",
+            "def _dispatch(app, event) -> bool:",
+            "    ok = True",
+        ]
+        for policy in policies:
+            handle = model.aggregate(policy.handle_context, policy.handle_aggregate)
+            handle_event = handle.event(policy.handle_event)
+            # plain `if` per policy: two policies may react to the same event
+            lines.append(f"    if isinstance(event, {self._event_ref(handle_event, handle)}):")
+            lines.append(f"        ok = _{snake(policy.name)}(app, event) and ok")
+        lines.append("    return ok")
+        for policy in policies:
+            lines += ["", ""] + self._reaction_fn(model, policy)
+        return _file(lines)
+
+    def _reaction_fn(self, model: Model, policy: Policy) -> list[str]:
+        handle = model.aggregate(policy.handle_context, policy.handle_aggregate)
+        emit = model.aggregate(policy.emit_context, policy.emit_aggregate)
+        command = next(c for c in emit.commands if c.name == policy.emit_command)
+        event = handle.event(policy.handle_event)
+        is_create = command is emit.create_command()
+
+        # the source id is the handle aggregate's MODEL identity: its carried id when
+        # caller-supplied, else its stream id (which is the model id for minted streams)
+        if self._carries_identity(handle):
+            source_id = f'(getattr(event, "{self._identity_param_name(handle)}", "") or str(event.originator_id))'
+        else:
+            source_id = "str(event.originator_id)"
+        args = []
+        if not is_create:
+            args.append(source_id)
+        for field in command.data:
+            if field.is_identity:
+                # a policy-minted create inherits the source aggregate's id (usage.id = job.id)
+                if is_create:
+                    args.append(source_id)
+                continue
+            if snake(field.name) == snake(f"{policy.handle_aggregate}-id"):
+                args.append(source_id)
+            elif event.data.has(field.name):
+                args.append(f"event.{snake(field.name)}")
+            else:
+                args.append(default_literal(field))
+
+        return [
+            f"def _{snake(policy.name)}(app, event) -> bool:",
+            "    try:",
+            "        with transaction.atomic():  # savepoint: a dedup rollback must not poison the outer tx",
+            f"            app.{snake(command.name)}({', '.join(args)})",
+            "    except IntegrityError:",
+            "        pass  # deterministic id: this event was already reacted to (at-least-once redelivery)",
+            "    except Exception as error:",
+            f'        print(f"policy {policy.name} failed to dispatch {command.name} ({{error}})", flush=True)',
+            "        return False",
+            "    return True",
+        ]
+
+    # -- project-level files ---------------------------------------------------
 
     def _settings(self, model: Model) -> str:
         # `shared` is an app so manage.py finds the eventstore_* commands
@@ -775,13 +1014,18 @@ class DjangoEventSourcingAdapter:
             "",
             "_HERE = Path(__file__).resolve().parent",
             "",
-            "# domain event class -> (aggregate name, ESDM event name) for the 0004 event rows",
+            "# domain event class -> (aggregate, ESDM event name, carried-identity attr) rows",
             "_EVENTS = {",
         ]
         for aggregate in aggregates:
+            id_attr = (
+                f'"{self._identity_param_name(aggregate)}"'
+                if self._carries_identity(aggregate)
+                else "None"
+            )
             for event in aggregate.events:
                 lines.append(
-                    f'    {self._event_ref(event, aggregate)}: ("{aggregate.name}", "{event.name}"),'
+                    f'    {self._event_ref(event, aggregate)}: ("{aggregate.name}", "{event.name}", {id_attr}),'
                 )
         lines.append("}")
         fallback = _py_literal(aggregates[0].name) if aggregates else '"aggregate"'
@@ -853,8 +1097,11 @@ class DjangoEventSourcingAdapter:
             "",
         ]
         if has_rejection:
-            lines += ["import pytest", "", "from shared.errors import IllegalTransition"]
-        lines.append(f"from {feature.bounded_context}.application import {app_class}")
+            lines += ["import pytest", "", "from shared.errors import DomainViolation"]
+        # the application service lives in the PRIMARY context (see generate), which
+        # is not necessarily the feature's own context in a multi-context model
+        primary = next(c for c in model.bounded_contexts if c.aggregates)
+        lines.append(f"from {primary.name}.application import {app_class}")
         lines += [
             "",
             "",
@@ -876,7 +1123,7 @@ class DjangoEventSourcingAdapter:
         create = aggregate.create_command()
         call = self._invoke(aggregate, when_cmd, scenario.command_data, id_var, is_create=when_cmd is create)
         if scenario.is_rejection():
-            lines.append("    with pytest.raises(IllegalTransition):")
+            lines.append("    with pytest.raises(DomainViolation):")
             lines.append(f"        {call}")
             return lines
         if when_cmd is create:
@@ -903,6 +1150,9 @@ class DjangoEventSourcingAdapter:
             args.append(id_var)
         for field in cmd.data:
             if field.is_identity:
+                # a caller-supplied-identity create takes the id in its declared position
+                if is_create and self._carries_identity(aggregate):
+                    args.append(_py_literal(data.get(field.name, "")))
                 continue
             args.append(_py_literal(data.get(field.name, self._zero_value(field))))
         return f"app.{method}({', '.join(args)})"
@@ -914,10 +1164,12 @@ class DjangoEventSourcingAdapter:
             if event is None:
                 continue
             if event.lifecycle.value == "create":
-                carried = {f.name for f in event.data}
+                # subset-match: only assert state fields the scenario declared, never
+                # force an undeclared field to a default/None.
                 for field in aggregate.non_identity_state():
-                    value = example.data.get(field.name) if field.name in carried else field.default
-                    checks.append((snake(field.name), *self._cmp(field.json_type, value)))
+                    if field.name not in example.data:
+                        continue
+                    checks.append((snake(field.name), *self._cmp(field.json_type, example.data[field.name])))
                 if aggregate.state_machine is not None:
                     checks.append(("status", "==", _py_literal(aggregate.state_machine.initial)))
             elif event.lifecycle.value == "delete":
@@ -929,7 +1181,9 @@ class DjangoEventSourcingAdapter:
                 for field in event.data:
                     if field.is_identity or not aggregate.state.has(field.name):
                         continue
-                    checks.append((snake(field.name), *self._cmp(field.json_type, example.data.get(field.name))))
+                    if field.name not in example.data:
+                        continue
+                    checks.append((snake(field.name), *self._cmp(field.json_type, example.data[field.name])))
         getter = f"app.repository.get(UUID({id_var}))"
         if len(checks) > 1:
             lines = [f"    task = {getter}"]
