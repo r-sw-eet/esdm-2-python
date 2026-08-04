@@ -1,9 +1,9 @@
 # esdm-2-python
 
 The **Python codegen** of the ESDM toolchain: it turns a business-process / domain model —
-authored as **BPMN** or as an [ESDM](https://www.esdm.io/) model (Event-Sourced Domain
-Modeling — YAML documents describing an event-sourced domain) — into a **real, runnable
-application**. It emits **Django** apps that implement the model with **CQRS**, an
+authored as **BPMN** (via [bpmn-2-esdm](https://github.com/r-sw-eet/bpmn-2-esdm), proposal 0003) or
+written as an [ESDM](https://www.esdm.io/) model (Event-Sourced Domain Modeling — YAML documents
+describing an event-sourced domain) — into a **real, runnable application**. It emits **Django** apps that implement the model with **CQRS**, an
 **event-driven read side** and **event sourcing**, in one of two flavors:
 
 | Target                          | Event store                                                                                                               | Read models                | Projection style                                   |
@@ -98,6 +98,7 @@ Standalone codegen — depends on no sibling repo. Around it:
 | `../esdm-extensions` | the **spec repo** this codegen implements — proposals 0001 (state machines), 0002 (FEEL rules), 0003 (BPMN→ESDM), 0004 (domain-console contract) |
 | `../esdm-vue-reader` | the stack-agnostic **domain console** — point it at a running generated app; it consumes the 0004 contract the app emits                         |
 | `../esdm-2-symfony`  | the sibling PHP → Symfony codegen (reference for the target shape)                                                                               |
+| `../bpmn-2-esdm`     | the **BPMN → ESDM mapper** (proposal 0003) — draw the process, get the ESDM this codegen reads. One tool for the whole family; its output is stack-agnostic |
 
 ## Generate and run the `todo` app
 
