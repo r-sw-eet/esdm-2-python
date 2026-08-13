@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# Launcher so tools can invoke the CLI as `bin/esdmgen <args>` like the siblings do,
+# without knowing about PYTHONPATH or which interpreter holds the dependencies.
+set -e
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if [ -z "${PYTHON:-}" ]; then
+    if [ -x "$root/.venv/bin/python" ]; then PYTHON="$root/.venv/bin/python"; else PYTHON=python3; fi
+fi
+
+PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" exec "$PYTHON" -m esdm2python.cli "$@"

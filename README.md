@@ -36,7 +36,12 @@ python -m esdm2python.cli generate examples/todo   # default target -> examples/
 python -m esdm2python.cli generate examples/todo --target django-eventsourcingdb
                                                    # -> examples/todo/generated/python-esdb/
 python -m esdm2python.cli targets                  # list adapter targets
+python -m esdm2python.cli targets --json           # name, description, slug - what esdm-studio reads
 ```
+
+`bin/esdmgen <args>` runs the same CLI without needing `PYTHONPATH` or the right interpreter (it
+prefers `.venv/bin/python`, else `python3`, and honours `$PYTHON`). That is how
+[esdm-studio](https://github.com/r-sw-eet/esdm-studio) drives this generator.
 
 The pipeline mirrors the sibling generators (`esdm-2-symfony`, `esdm-2-nimbus`): **load the ESDM
 YAML → build a stack-neutral typed model → FEEL gate → the chosen adapter emits an in-memory file

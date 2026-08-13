@@ -8,6 +8,7 @@ adapter's output to `<out>/<slug>/`. Mirrors the sibling generators' CLI.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -24,6 +25,7 @@ def _load_config(app_dir: Path) -> dict:
         return {}
     loaded = yaml.safe_load(config_file.read_text())
     return loaded if isinstance(loaded, dict) else {}
+
 
 
 def _validate_feel(model: Model) -> list[str]:
@@ -82,8 +84,13 @@ def _generate(args: argparse.Namespace) -> int:
 
 
 def _targets(args: argparse.Namespace) -> int:
-    registry = AdapterRegistry.with_defaults()
-    for adapter in registry.all():
+    adapters = AdapterRegistry.with_defaults().all()
+    if args.json:
+        print(json.dumps([
+            {"name": a.name(), "description": a.description(), "slug": a.slug()} for a in adapters
+        ]))
+        return 0
+    for adapter in adapters:
         print(f"{adapter.name()}\t{adapter.description()}")
     return 0
 
@@ -100,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     gen.set_defaults(func=_generate)
 
     tgt = sub.add_parser("targets", help="list registered adapter targets")
+    tgt.add_argument("--json", action="store_true", help="output as JSON (name, description, slug)")
     tgt.set_defaults(func=_targets)
 
     args = parser.parse_args(argv)
