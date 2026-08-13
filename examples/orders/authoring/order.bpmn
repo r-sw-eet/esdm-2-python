@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Order fulfilment, authored as BPMN (the human source of truth for proposal 0003).
+  `esdmgen bpmn:map examples/orders` decomposes this into ESDM core + a 0001 state
+  machine + a 0002 FEEL guard. esdm: extension hints carry what BPMN cannot
+  express (aggregate state names, field types); the lifecycle/guards are derived
+  from the sequence-flow graph and condition expressions. A real bpmn.io editor
+  would also embed bpmndi diagram shapes — omitted here, the mapper ignores them.
+-->
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:esdm="https://esdm-extensions.io/bpmn"
+    id="Definitions_orders"
+    targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:extensionElements>
+    <esdm:meta domain="orders"/>
+  </bpmn:extensionElements>
+
+  <bpmn:process id="Process_order" name="Order" isExecutable="true">
+    <bpmn:extensionElements>
+      <esdm:meta context="orders" aggregate="order"/>
+    </bpmn:extensionElements>
+
+    <bpmn:startEvent id="Start_1" name="order requested">
+      <bpmn:outgoing>Flow_start_place</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="Task_place" name="place order">
+      <bpmn:extensionElements>
+        <esdm:meta state="placed"/>
+        <esdm:field name="customerName" type="string"/>
+        <esdm:field name="total" type="number"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_start_place</bpmn:incoming>
+      <bpmn:outgoing>Flow_place_pay</bpmn:outgoing>
+      <bpmn:outgoing>Flow_place_cancel</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="Task_pay" name="pay order">
+      <bpmn:extensionElements>
+        <esdm:meta state="paid"/>
+        <esdm:field name="paidAmount" type="number"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_place_pay</bpmn:incoming>
+      <bpmn:outgoing>Flow_pay_ship</bpmn:outgoing>
+      <bpmn:outgoing>Flow_pay_cancel</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:serviceTask id="Task_ship" name="ship order">
+      <bpmn:extensionElements>
+        <esdm:meta state="shipped"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_pay_ship</bpmn:incoming>
+      <bpmn:outgoing>Flow_ship_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:userTask id="Task_cancel" name="cancel order">
+      <bpmn:extensionElements>
+        <esdm:meta state="cancelled" lifecycle="mutate"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_place_cancel</bpmn:incoming>
+      <bpmn:incoming>Flow_pay_cancel</bpmn:incoming>
+      <bpmn:outgoing>Flow_cancel_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="End_shipped" name="fulfilled">
+      <bpmn:incoming>Flow_ship_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:endEvent id="End_cancelled" name="order cancelled">
+      <bpmn:incoming>Flow_cancel_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="Flow_start_place" sourceRef="Start_1" targetRef="Task_place"/>
+    <bpmn:sequenceFlow id="Flow_place_pay" sourceRef="Task_place" targetRef="Task_pay"/>
+    <bpmn:sequenceFlow id="Flow_place_cancel" sourceRef="Task_place" targetRef="Task_cancel"/>
+    <bpmn:sequenceFlow id="Flow_pay_ship" sourceRef="Task_pay" targetRef="Task_ship">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">paidAmount &gt;= total</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_pay_cancel" sourceRef="Task_pay" targetRef="Task_cancel"/>
+    <bpmn:sequenceFlow id="Flow_ship_end" sourceRef="Task_ship" targetRef="End_shipped"/>
+    <bpmn:sequenceFlow id="Flow_cancel_end" sourceRef="Task_cancel" targetRef="End_cancelled"/>
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_order">
+      <bpmndi:BPMNShape id="di_Start_1" bpmnElement="Start_1"><dc:Bounds x="160" y="200" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_place" bpmnElement="Task_place"><dc:Bounds x="250" y="178" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_pay" bpmnElement="Task_pay"><dc:Bounds x="410" y="178" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_ship" bpmnElement="Task_ship"><dc:Bounds x="580" y="178" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_cancel" bpmnElement="Task_cancel"><dc:Bounds x="410" y="320" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_End_shipped" bpmnElement="End_shipped"><dc:Bounds x="760" y="200" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_End_cancelled" bpmnElement="End_cancelled"><dc:Bounds x="760" y="342" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="di_Flow_start_place" bpmnElement="Flow_start_place"><di:waypoint x="196" y="218"/><di:waypoint x="250" y="218"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_place_pay" bpmnElement="Flow_place_pay"><di:waypoint x="350" y="218"/><di:waypoint x="410" y="218"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_place_cancel" bpmnElement="Flow_place_cancel"><di:waypoint x="300" y="258"/><di:waypoint x="300" y="360"/><di:waypoint x="410" y="360"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_pay_ship" bpmnElement="Flow_pay_ship"><di:waypoint x="510" y="218"/><di:waypoint x="580" y="218"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_pay_cancel" bpmnElement="Flow_pay_cancel"><di:waypoint x="460" y="258"/><di:waypoint x="460" y="320"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_ship_end" bpmnElement="Flow_ship_end"><di:waypoint x="680" y="218"/><di:waypoint x="760" y="218"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_cancel_end" bpmnElement="Flow_cancel_end"><di:waypoint x="510" y="360"/><di:waypoint x="760" y="360"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

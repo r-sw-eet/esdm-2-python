@@ -1,0 +1,26 @@
+# Aggregate state machine (proposal 0001) with a FEEL guard (proposal 0002).
+# Sidecar so `esdm lint` (core only) ignores it; the generator reads it and the
+# FEEL gate validates the `when:` expression against the quote's state fields.
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: quote-lifecycle
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+initial: drafted
+states:
+  - { name: drafted }
+  - { name: sent }
+  - { name: accepted, final: true }
+  - { name: rejected, final: true }
+transitions:                 # evolve
+  - { on: quote-drafted, to: drafted }
+  - { on: quote-sent, to: sent }
+  - { on: quote-accepted, to: accepted }
+  - { on: quote-rejected, to: rejected }
+admits:                      # decide (state) + FEEL guard (data/temporal)
+  - { command: price-quote, from: [drafted, sent] }
+  - { command: send-quote, from: [drafted] }
+  - { command: accept-quote, from: [sent], when: 'validUntil >= today()' }
+  - { command: reject-quote, from: [sent] }

@@ -1,0 +1,5 @@
+target: django-eventsourcing-postgres
+model: model
+out: generated
+options:
+  appName: commerce

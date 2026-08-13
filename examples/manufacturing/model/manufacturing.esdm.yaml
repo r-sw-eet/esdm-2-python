@@ -1,0 +1,417 @@
+apiVersion: schema.esdm.io/core/v1
+kind: domain
+name: manufacturing
+description: A manufacturer whose website takes requests (RFQs) that are answered with quotes (Angebote).
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: intake
+scope:
+  domain: manufacturing
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: quoting
+scope:
+  domain: manufacturing
+---
+# ---- intake: the website-facing request ----------------------------------
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: request
+scope:
+  domain: manufacturing
+  boundedContext: intake
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id: { type: string }
+    customerName: { type: string }
+    customerEmail: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
+  required: [id, customerName, customerEmail, product, quantity]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: request-submitted
+scope:
+  domain: manufacturing
+  boundedContext: intake
+  aggregate: request
+data:
+  type: object
+  properties:
+    id: { type: string }
+    customerName: { type: string }
+    customerEmail: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
+  required: [id, customerName, customerEmail, product, quantity]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: request-withdrawn
+scope:
+  domain: manufacturing
+  boundedContext: intake
+  aggregate: request
+data:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: submit-request
+scope:
+  domain: manufacturing
+  boundedContext: intake
+  aggregate: request
+data:
+  type: object
+  properties:
+    customerName: { type: string }
+    customerEmail: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
+  required: [customerName, customerEmail, product, quantity]
+publishes:
+  - request-submitted
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: withdraw-request
+scope:
+  domain: manufacturing
+  boundedContext: intake
+  aggregate: request
+data:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+publishes:
+  - request-withdrawn
+---
+# ---- quoting: the Angebot -------------------------------------------------
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: quote
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id: { type: string }
+    requestId: { type: string }
+    customerName: { type: string, default: "" }
+    product: { type: string, default: "" }
+    quantity: { type: integer, default: 0 }
+    amount: { type: number, default: 0 }
+    currency: { type: string, default: EUR }
+    validUntil: { type: string, default: "" }
+  required: [id, requestId, customerName, product, quantity, amount, currency, validUntil]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: quote-drafted
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+    requestId: { type: string }
+    customerName: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
+    status: { type: string, default: drafted }
+  required: [id, requestId, customerName, product, quantity, status]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: quote-priced
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+    amount: { type: number }
+    currency: { type: string }
+    validUntil: { type: string }
+  required: [id, amount, currency, validUntil]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: quote-sent
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+    status: { type: string, default: sent }
+  required: [id, status]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: quote-accepted
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+    status: { type: string, default: accepted }
+  required: [id, status]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: quote-rejected
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+    status: { type: string, default: rejected }
+  required: [id, status]
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: draft-quote
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+# Emitted by the draft-quote-on-request policy. The payload carries a deliberate
+# SUBSET of the request - customerEmail stays in intake - so the reaction is a
+# mapping and not a copy of the handled event.
+data:
+  type: object
+  properties:
+    requestId: { type: string }
+    customerName: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
+  required: [requestId, customerName, product, quantity]
+publishes:
+  - quote-drafted
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: price-quote
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+    amount: { type: number }
+    currency: { type: string }
+    validUntil: { type: string }
+  required: [id, amount, currency, validUntil]
+publishes:
+  - quote-priced
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: send-quote
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+publishes:
+  - quote-sent
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: accept-quote
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+publishes:
+  - quote-accepted
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: reject-quote
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+  aggregate: quote
+data:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+publishes:
+  - quote-rejected
+---
+# ---- the policy: a new website request auto-drafts a quote ----------------
+apiVersion: schema.esdm.io/core/v1
+kind: policy
+name: draft-quote-on-request
+# The reaction's payload, declared rather than left to each generator's convention
+# (esdm-extensions proposal 0005). This states exactly what the convention already did,
+# so the emitted apps are byte-identical - it is the conformance suite's only coverage
+# of the mapping path.
+metadata:
+  annotations:
+    esdm-extensions.io/mapping: "{ requestId: id, customerName: customerName, product: product, quantity: quantity }"
+scope:
+  domain: manufacturing
+deliveryGuarantee: at-most-once
+handles:
+  - boundedContext: intake
+    aggregate: request
+    event: request-submitted
+emits:
+  - boundedContext: quoting
+    aggregate: quote
+    command: draft-quote
+constraints:
+  - name: only-for-a-positive-quantity
+    rule: quantity > 0
+---
+# ---- read models ----------------------------------------------------------
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: requests
+scope:
+  domain: manufacturing
+  boundedContext: intake
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id: { type: string }
+    customerName: { type: string }
+    customerEmail: { type: string }
+    product: { type: string }
+    quantity: { type: integer }
+  required: [id, customerName, customerEmail, product, quantity]
+projections:
+  - boundedContext: intake
+    aggregate: request
+    event: request-submitted
+    rule: Insert a row for the new request.
+  - boundedContext: intake
+    aggregate: request
+    event: request-withdrawn
+    rule: Delete the row.
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: quotes
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id: { type: string }
+    requestId: { type: string }
+    customerName: { type: string, default: "" }
+    product: { type: string, default: "" }
+    quantity: { type: integer, default: 0 }
+    amount: { type: number, default: 0 }
+    currency: { type: string, default: EUR }
+    status: { type: string }
+    validUntil: { type: string, default: "" }
+  required: [id, requestId, customerName, product, quantity, amount, currency, status, validUntil]
+projections:
+  - boundedContext: quoting
+    aggregate: quote
+    event: quote-drafted
+    rule: Insert a row in status drafted, carrying the fields the policy mapped over from the request.
+  - boundedContext: quoting
+    aggregate: quote
+    event: quote-priced
+    rule: Update amount and currency.
+  - boundedContext: quoting
+    aggregate: quote
+    event: quote-sent
+    rule: Update status to sent.
+  - boundedContext: quoting
+    aggregate: quote
+    event: quote-accepted
+    rule: Update status to accepted.
+  - boundedContext: quoting
+    aggregate: quote
+    event: quote-rejected
+    rule: Update status to rejected.
+---
+# ---- queries --------------------------------------------------------------
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-requests
+scope:
+  domain: manufacturing
+  boundedContext: intake
+readModel: requests
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-quotes
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+readModel: quotes
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-quote
+scope:
+  domain: manufacturing
+  boundedContext: quoting
+readModel: quotes
+parameters:
+  type: object
+  properties:
+    id: { type: string }
+  required: [id]
+result:
+  type: object

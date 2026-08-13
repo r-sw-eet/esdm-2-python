@@ -1,0 +1,537 @@
+apiVersion: schema.esdm.io/core/v1
+kind: domain
+name: commerce
+description: 'Generated from a BPMN model (proposal 0003).'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: sales
+scope:
+  domain: commerce
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: order
+scope:
+  domain: commerce
+  boundedContext: sales
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    customer:
+      type: string
+      default: ''
+    total:
+      type: number
+      default: 0
+    paidAmount:
+      type: number
+      default: 0
+  required:
+    - id
+    - customer
+    - total
+    - paidAmount
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-placed
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    customer:
+      type: string
+    total:
+      type: number
+    status:
+      type: string
+      default: placed
+  required:
+    - id
+    - customer
+    - total
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-paid
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    paidAmount:
+      type: number
+    status:
+      type: string
+      default: paid
+  required:
+    - id
+    - paidAmount
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-approved
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: approved
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-cancelled
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: cancelled
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: place-order
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    customer:
+      type: string
+    total:
+      type: number
+  required:
+    - customer
+    - total
+publishes:
+  - order-placed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: pay-order
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    paidAmount:
+      type: number
+  required:
+    - id
+    - paidAmount
+publishes:
+  - order-paid
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: approve-order
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - order-approved
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: cancel-order
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - order-cancelled
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: orders
+scope:
+  domain: commerce
+  boundedContext: sales
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    customer:
+      type: string
+      default: ''
+    total:
+      type: number
+      default: 0
+    paidAmount:
+      type: number
+      default: 0
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - customer
+    - total
+    - paidAmount
+    - status
+projections:
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-placed
+    rule: 'Insert a row.'
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-paid
+    rule: 'Update the row and set status to paid.'
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-approved
+    rule: 'Update the row and set status to approved.'
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-cancelled
+    rule: 'Update the row and set status to cancelled.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-orders
+scope:
+  domain: commerce
+  boundedContext: sales
+readModel: orders
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-order
+scope:
+  domain: commerce
+  boundedContext: sales
+readModel: orders
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: warehouse
+scope:
+  domain: commerce
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: shipment
+scope:
+  domain: commerce
+  boundedContext: warehouse
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    orderId:
+      type: string
+      default: ''
+    weight:
+      type: number
+      default: 0
+  required:
+    - id
+    - orderId
+    - weight
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: shipment-registered
+scope:
+  domain: commerce
+  boundedContext: warehouse
+  aggregate: shipment
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    orderId:
+      type: string
+    status:
+      type: string
+      default: registered
+  required:
+    - id
+    - orderId
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: shipment-packed
+scope:
+  domain: commerce
+  boundedContext: warehouse
+  aggregate: shipment
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    weight:
+      type: number
+    status:
+      type: string
+      default: packed
+  required:
+    - id
+    - weight
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: shipment-dispatched
+scope:
+  domain: commerce
+  boundedContext: warehouse
+  aggregate: shipment
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: dispatched
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: register-shipment
+scope:
+  domain: commerce
+  boundedContext: warehouse
+  aggregate: shipment
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    orderId:
+      type: string
+  required:
+    - orderId
+publishes:
+  - shipment-registered
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: pack-shipment
+scope:
+  domain: commerce
+  boundedContext: warehouse
+  aggregate: shipment
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    weight:
+      type: number
+  required:
+    - id
+    - weight
+publishes:
+  - shipment-packed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: dispatch-shipment
+scope:
+  domain: commerce
+  boundedContext: warehouse
+  aggregate: shipment
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - shipment-dispatched
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: shipments
+scope:
+  domain: commerce
+  boundedContext: warehouse
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    orderId:
+      type: string
+      default: ''
+    weight:
+      type: number
+      default: 0
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - orderId
+    - weight
+    - status
+projections:
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    event: shipment-registered
+    rule: 'Insert a row.'
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    event: shipment-packed
+    rule: 'Update the row and set status to packed.'
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    event: shipment-dispatched
+    rule: 'Update the row and set status to dispatched.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-shipments
+scope:
+  domain: commerce
+  boundedContext: warehouse
+readModel: shipments
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-shipment
+scope:
+  domain: commerce
+  boundedContext: warehouse
+readModel: shipments
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: policy
+name: fulfil
+scope:
+  domain: commerce
+deliveryGuarantee: at-most-once
+handles:
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-approved
+emits:
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    command: register-shipment

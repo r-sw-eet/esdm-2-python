@@ -1,0 +1,45 @@
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: invoice-lifecycle
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+initial: raised
+states:
+  -
+    name: raised
+  -
+    name: priced
+  -
+    name: paying
+  -
+    name: settled
+    final: true
+transitions:
+  -
+    'on': invoice-raised
+    to: raised
+  -
+    'on': invoice-priced
+    to: priced
+  -
+    'on': payment-recorded
+    to: paying
+  -
+    'on': invoice-settled
+    to: settled
+admits:
+  -
+    command: price-invoice
+    from:
+      - raised
+  -
+    command: record-payment
+    from:
+      - priced
+  -
+    command: settle-invoice
+    from:
+      - paying
+    when: 'paidAmount >= amount'

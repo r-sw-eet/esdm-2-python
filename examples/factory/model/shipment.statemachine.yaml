@@ -1,0 +1,36 @@
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: shipment-lifecycle
+scope:
+  domain: factory
+  boundedContext: warehouse
+  aggregate: shipment
+initial: created
+states:
+  -
+    name: created
+  -
+    name: packed
+  -
+    name: shipped
+    final: true
+transitions:
+  -
+    'on': shipment-created
+    to: created
+  -
+    'on': shipment-packed
+    to: packed
+  -
+    'on': shipment-shipped
+    to: shipped
+admits:
+  -
+    command: pack-shipment
+    from:
+      - created
+  -
+    command: ship-shipment
+    from:
+      - packed
+    when: 'weight > 0'

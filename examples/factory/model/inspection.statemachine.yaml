@@ -1,0 +1,44 @@
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: inspection-lifecycle
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+initial: inspecting
+states:
+  -
+    name: inspecting
+  -
+    name: inspected
+  -
+    name: passed
+    final: true
+transitions:
+  -
+    'on': inspection-started
+    to: inspecting
+  -
+    'on': inspection-recorded
+    to: inspected
+  -
+    'on': inspection-passed
+    to: passed
+  -
+    'on': inspection-reworked
+    to: inspecting
+admits:
+  -
+    command: record-inspection
+    from:
+      - inspecting
+  -
+    command: pass-inspection
+    from:
+      - inspected
+    when: 'defects = 0'
+  -
+    command: rework
+    from:
+      - inspected
+    when: 'defects > 0'

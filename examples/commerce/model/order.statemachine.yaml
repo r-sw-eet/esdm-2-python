@@ -1,0 +1,47 @@
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: order-lifecycle
+scope:
+  domain: commerce
+  boundedContext: sales
+  aggregate: order
+initial: placed
+states:
+  -
+    name: placed
+  -
+    name: paid
+  -
+    name: approved
+    final: true
+  -
+    name: cancelled
+    final: true
+transitions:
+  -
+    'on': order-placed
+    to: placed
+  -
+    'on': order-paid
+    to: paid
+  -
+    'on': order-approved
+    to: approved
+  -
+    'on': order-cancelled
+    to: cancelled
+admits:
+  -
+    command: pay-order
+    from:
+      - placed
+  -
+    command: approve-order
+    from:
+      - paid
+    when: 'paidAmount >= total'
+  -
+    command: cancel-order
+    from:
+      - placed
+      - paid

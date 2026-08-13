@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Commerce — a "big" BPMN model exercising the full BPMN → ESDM 2.0 path (0003):
+    • two pools          → two bounded contexts + aggregates (Sales/order, Warehouse/shipment)
+    • a message flow     → an ESDM policy (order approved ⇒ register a shipment)
+    • XOR-on-data flow   → [0002] FEEL guards (approve when paidAmount >= total; dispatch when weight > 0)
+    • the flow graph     → [0001] state machines (placed→paid→approved/cancelled, registered→packed→dispatched)
+  esdm: hints carry what BPMN can't (aggregate, state names, field types). Drawn with diagram
+  interchange so it renders in the console's Author tab.
+-->
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:esdm="https://esdm-extensions.io/bpmn"
+    id="Definitions_commerce"
+    targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:extensionElements>
+    <esdm:meta domain="commerce"/>
+  </bpmn:extensionElements>
+
+  <bpmn:collaboration id="Collaboration_1">
+    <bpmn:participant id="Participant_sales" name="Sales" processRef="Process_sales"/>
+    <bpmn:participant id="Participant_warehouse" name="Warehouse" processRef="Process_warehouse"/>
+    <bpmn:messageFlow id="MF_fulfil" name="fulfil" sourceRef="Task_approve" targetRef="Task_register"/>
+  </bpmn:collaboration>
+
+  <!-- ===================== Sales (aggregate: order) ===================== -->
+  <bpmn:process id="Process_sales" name="Sales" isExecutable="true">
+    <bpmn:extensionElements>
+      <esdm:meta context="sales" aggregate="order"/>
+    </bpmn:extensionElements>
+
+    <bpmn:startEvent id="Start_s" name="checkout">
+      <bpmn:outgoing>Flow_s_start_place</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="Task_place" name="place order">
+      <bpmn:extensionElements>
+        <esdm:meta state="placed"/>
+        <esdm:field name="customer" type="string"/>
+        <esdm:field name="total" type="number"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_s_start_place</bpmn:incoming>
+      <bpmn:outgoing>Flow_s_place_pay</bpmn:outgoing>
+      <bpmn:outgoing>Flow_s_place_cancel</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="Task_pay" name="pay order">
+      <bpmn:extensionElements>
+        <esdm:meta state="paid"/>
+        <esdm:field name="paidAmount" type="number"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_s_place_pay</bpmn:incoming>
+      <bpmn:outgoing>Flow_s_pay_approve</bpmn:outgoing>
+      <bpmn:outgoing>Flow_s_pay_cancel</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:serviceTask id="Task_approve" name="approve order">
+      <bpmn:extensionElements>
+        <esdm:meta state="approved"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_s_pay_approve</bpmn:incoming>
+      <bpmn:outgoing>Flow_s_approve_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:userTask id="Task_cancel" name="cancel order">
+      <bpmn:extensionElements>
+        <esdm:meta state="cancelled" lifecycle="mutate"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_s_place_cancel</bpmn:incoming>
+      <bpmn:incoming>Flow_s_pay_cancel</bpmn:incoming>
+      <bpmn:outgoing>Flow_s_cancel_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="End_approved" name="approved">
+      <bpmn:incoming>Flow_s_approve_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:endEvent id="End_cancelled" name="cancelled">
+      <bpmn:incoming>Flow_s_cancel_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="Flow_s_start_place" sourceRef="Start_s" targetRef="Task_place"/>
+    <bpmn:sequenceFlow id="Flow_s_place_pay" sourceRef="Task_place" targetRef="Task_pay"/>
+    <bpmn:sequenceFlow id="Flow_s_place_cancel" sourceRef="Task_place" targetRef="Task_cancel"/>
+    <bpmn:sequenceFlow id="Flow_s_pay_approve" sourceRef="Task_pay" targetRef="Task_approve">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">paidAmount &gt;= total</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_s_pay_cancel" sourceRef="Task_pay" targetRef="Task_cancel"/>
+    <bpmn:sequenceFlow id="Flow_s_approve_end" sourceRef="Task_approve" targetRef="End_approved"/>
+    <bpmn:sequenceFlow id="Flow_s_cancel_end" sourceRef="Task_cancel" targetRef="End_cancelled"/>
+  </bpmn:process>
+
+  <!-- =================== Warehouse (aggregate: shipment) =================== -->
+  <bpmn:process id="Process_warehouse" name="Warehouse" isExecutable="true">
+    <bpmn:extensionElements>
+      <esdm:meta context="warehouse" aggregate="shipment"/>
+    </bpmn:extensionElements>
+
+    <bpmn:startEvent id="Start_w" name="fulfilment requested">
+      <bpmn:outgoing>Flow_w_start_register</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="Task_register" name="register shipment">
+      <bpmn:extensionElements>
+        <esdm:meta state="registered"/>
+        <esdm:field name="orderId" type="string"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_w_start_register</bpmn:incoming>
+      <bpmn:outgoing>Flow_w_register_pack</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:userTask id="Task_pack" name="pack shipment">
+      <bpmn:extensionElements>
+        <esdm:meta state="packed"/>
+        <esdm:field name="weight" type="number"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_w_register_pack</bpmn:incoming>
+      <bpmn:outgoing>Flow_w_pack_dispatch</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:sendTask id="Task_dispatch" name="dispatch shipment">
+      <bpmn:extensionElements>
+        <esdm:meta state="dispatched"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_w_pack_dispatch</bpmn:incoming>
+      <bpmn:outgoing>Flow_w_dispatch_end</bpmn:outgoing>
+    </bpmn:sendTask>
+
+    <bpmn:endEvent id="End_w" name="dispatched">
+      <bpmn:incoming>Flow_w_dispatch_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="Flow_w_start_register" sourceRef="Start_w" targetRef="Task_register"/>
+    <bpmn:sequenceFlow id="Flow_w_register_pack" sourceRef="Task_register" targetRef="Task_pack"/>
+    <bpmn:sequenceFlow id="Flow_w_pack_dispatch" sourceRef="Task_pack" targetRef="Task_dispatch">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">weight &gt; 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_w_dispatch_end" sourceRef="Task_dispatch" targetRef="End_w"/>
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
+      <bpmndi:BPMNShape id="di_Participant_sales" bpmnElement="Participant_sales" isHorizontal="true">
+        <dc:Bounds x="160" y="80" width="920" height="300"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Participant_warehouse" bpmnElement="Participant_warehouse" isHorizontal="true">
+        <dc:Bounds x="160" y="420" width="920" height="220"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="di_Start_s" bpmnElement="Start_s"><dc:Bounds x="250" y="162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_place" bpmnElement="Task_place"><dc:Bounds x="320" y="140" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_pay" bpmnElement="Task_pay"><dc:Bounds x="480" y="140" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_approve" bpmnElement="Task_approve"><dc:Bounds x="640" y="140" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_cancel" bpmnElement="Task_cancel"><dc:Bounds x="480" y="260" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_End_approved" bpmnElement="End_approved"><dc:Bounds x="800" y="162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_End_cancelled" bpmnElement="End_cancelled"><dc:Bounds x="800" y="282" width="36" height="36"/></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="di_Start_w" bpmnElement="Start_w"><dc:Bounds x="250" y="502" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_register" bpmnElement="Task_register"><dc:Bounds x="320" y="480" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_pack" bpmnElement="Task_pack"><dc:Bounds x="480" y="480" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Task_dispatch" bpmnElement="Task_dispatch"><dc:Bounds x="640" y="480" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_End_w" bpmnElement="End_w"><dc:Bounds x="800" y="502" width="36" height="36"/></bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="di_Flow_s_start_place" bpmnElement="Flow_s_start_place"><di:waypoint x="286" y="180"/><di:waypoint x="320" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_s_place_pay" bpmnElement="Flow_s_place_pay"><di:waypoint x="420" y="180"/><di:waypoint x="480" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_s_pay_approve" bpmnElement="Flow_s_pay_approve"><di:waypoint x="580" y="180"/><di:waypoint x="640" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_s_approve_end" bpmnElement="Flow_s_approve_end"><di:waypoint x="740" y="180"/><di:waypoint x="800" y="180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_s_place_cancel" bpmnElement="Flow_s_place_cancel"><di:waypoint x="370" y="220"/><di:waypoint x="370" y="300"/><di:waypoint x="480" y="300"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_s_pay_cancel" bpmnElement="Flow_s_pay_cancel"><di:waypoint x="530" y="220"/><di:waypoint x="530" y="260"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_s_cancel_end" bpmnElement="Flow_s_cancel_end"><di:waypoint x="580" y="300"/><di:waypoint x="800" y="300"/></bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="di_Flow_w_start_register" bpmnElement="Flow_w_start_register"><di:waypoint x="286" y="520"/><di:waypoint x="320" y="520"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_w_register_pack" bpmnElement="Flow_w_register_pack"><di:waypoint x="420" y="520"/><di:waypoint x="480" y="520"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_w_pack_dispatch" bpmnElement="Flow_w_pack_dispatch"><di:waypoint x="580" y="520"/><di:waypoint x="640" y="520"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_Flow_w_dispatch_end" bpmnElement="Flow_w_dispatch_end"><di:waypoint x="740" y="520"/><di:waypoint x="800" y="520"/></bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="di_MF_fulfil" bpmnElement="MF_fulfil">
+        <di:waypoint x="690" y="220"/><di:waypoint x="690" y="400"/><di:waypoint x="370" y="400"/><di:waypoint x="370" y="480"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

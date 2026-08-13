@@ -1,0 +1,35 @@
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: workorder-lifecycle
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+initial: opened
+states:
+  -
+    name: opened
+  -
+    name: producing
+  -
+    name: finished
+    final: true
+transitions:
+  -
+    'on': work-order-opened
+    to: opened
+  -
+    'on': production-started
+    to: producing
+  -
+    'on': production-finished
+    to: finished
+admits:
+  -
+    command: start-production
+    from:
+      - opened
+  -
+    command: finish-production
+    from:
+      - producing

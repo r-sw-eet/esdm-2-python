@@ -1,0 +1,47 @@
+apiVersion: schema.esdm.io/state-machine/v1
+kind: state-machine
+name: order-lifecycle
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+initial: placed
+states:
+  -
+    name: placed
+  -
+    name: reviewed
+  -
+    name: confirmed
+    final: true
+  -
+    name: rejected
+    final: true
+transitions:
+  -
+    'on': order-placed
+    to: placed
+  -
+    'on': order-reviewed
+    to: reviewed
+  -
+    'on': order-confirmed
+    to: confirmed
+  -
+    'on': order-rejected
+    to: rejected
+admits:
+  -
+    command: review-order
+    from:
+      - placed
+  -
+    command: confirm-order
+    from:
+      - reviewed
+    when: 'creditOk = true'
+  -
+    command: reject-order
+    from:
+      - reviewed
+    when: 'creditOk = false'

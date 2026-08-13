@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:esdm="https://esdm-extensions.io/bpmn" id="Definitions_factory" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:extensionElements><esdm:meta domain="factory"/></bpmn:extensionElements>
+  <bpmn:collaboration id="Collaboration_1">
+    <bpmn:participant id="Participant_sales" name="Sales" processRef="Process_sales"/>
+    <bpmn:participant id="Participant_production" name="Production" processRef="Process_production"/>
+    <bpmn:participant id="Participant_quality" name="Quality Control" processRef="Process_quality"/>
+    <bpmn:participant id="Participant_warehouse" name="Warehouse" processRef="Process_warehouse"/>
+    <bpmn:participant id="Participant_accounting" name="Accounting" processRef="Process_accounting"/>
+    <bpmn:messageFlow id="MF_0" name="produce" sourceRef="s_confirm" targetRef="p_open"/>
+    <bpmn:messageFlow id="MF_1" name="inspect" sourceRef="p_finish" targetRef="q_begin"/>
+    <bpmn:messageFlow id="MF_2" name="fulfil" sourceRef="q_pass" targetRef="w_create"/>
+    <bpmn:messageFlow id="MF_3" name="bill" sourceRef="w_ship" targetRef="a_raise"/>
+  </bpmn:collaboration>
+  <bpmn:process id="Process_sales" name="Sales" isExecutable="true">
+    <bpmn:extensionElements><esdm:meta context="sales" aggregate="order"/></bpmn:extensionElements>
+    <bpmn:startEvent id="s_start" name="order received"><bpmn:outgoing>sales_flow_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:userTask id="s_place" name="place order"><bpmn:extensionElements><esdm:meta state="placed"/><esdm:field name="customer" type="string"/><esdm:field name="product" type="string"/><esdm:field name="quantity" type="integer"/></bpmn:extensionElements><bpmn:incoming>sales_flow_0</bpmn:incoming><bpmn:outgoing>sales_flow_1</bpmn:outgoing></bpmn:userTask>
+    <bpmn:userTask id="s_review" name="review order"><bpmn:extensionElements><esdm:meta state="reviewed"/><esdm:field name="creditOk" type="boolean"/></bpmn:extensionElements><bpmn:incoming>sales_flow_1</bpmn:incoming><bpmn:outgoing>sales_flow_2</bpmn:outgoing></bpmn:userTask>
+    <bpmn:exclusiveGateway id="s_gw" name="credit ok?"><bpmn:incoming>sales_flow_2</bpmn:incoming><bpmn:outgoing>sales_flow_3</bpmn:outgoing><bpmn:outgoing>sales_flow_4</bpmn:outgoing></bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="s_confirm" name="confirm order"><bpmn:extensionElements><esdm:meta state="confirmed"/></bpmn:extensionElements><bpmn:incoming>sales_flow_3</bpmn:incoming><bpmn:outgoing>sales_flow_5</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:endEvent id="s_okend" name="confirmed"><bpmn:incoming>sales_flow_5</bpmn:incoming></bpmn:endEvent>
+    <bpmn:userTask id="s_reject" name="reject order"><bpmn:extensionElements><esdm:meta state="rejected"/></bpmn:extensionElements><bpmn:incoming>sales_flow_4</bpmn:incoming><bpmn:outgoing>sales_flow_6</bpmn:outgoing></bpmn:userTask>
+    <bpmn:endEvent id="s_rejend" name="rejected"><bpmn:incoming>sales_flow_6</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="sales_flow_0" sourceRef="s_start" targetRef="s_place"/>
+    <bpmn:sequenceFlow id="sales_flow_1" sourceRef="s_place" targetRef="s_review"/>
+    <bpmn:sequenceFlow id="sales_flow_2" sourceRef="s_review" targetRef="s_gw"/>
+    <bpmn:sequenceFlow id="sales_flow_3" sourceRef="s_gw" targetRef="s_confirm"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">creditOk = true</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="sales_flow_4" sourceRef="s_gw" targetRef="s_reject"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">creditOk = false</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="sales_flow_5" sourceRef="s_confirm" targetRef="s_okend"/>
+    <bpmn:sequenceFlow id="sales_flow_6" sourceRef="s_reject" targetRef="s_rejend"/>
+  </bpmn:process>
+  <bpmn:process id="Process_production" name="Production" isExecutable="true">
+    <bpmn:extensionElements><esdm:meta context="production" aggregate="workorder"/></bpmn:extensionElements>
+    <bpmn:startEvent id="p_start" name="production requested"><bpmn:outgoing>production_flow_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:serviceTask id="p_open" name="open work order"><bpmn:extensionElements><esdm:meta state="opened"/><esdm:field name="orderId" type="string"/></bpmn:extensionElements><bpmn:incoming>production_flow_0</bpmn:incoming><bpmn:outgoing>production_flow_1</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:userTask id="p_run" name="start production"><bpmn:extensionElements><esdm:meta state="producing" lifecycle="mutate"/></bpmn:extensionElements><bpmn:incoming>production_flow_1</bpmn:incoming><bpmn:outgoing>production_flow_2</bpmn:outgoing></bpmn:userTask>
+    <bpmn:serviceTask id="p_finish" name="finish production"><bpmn:extensionElements><esdm:meta state="finished"/></bpmn:extensionElements><bpmn:incoming>production_flow_2</bpmn:incoming><bpmn:outgoing>production_flow_3</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:endEvent id="p_end" name="finished"><bpmn:incoming>production_flow_3</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="production_flow_0" sourceRef="p_start" targetRef="p_open"/>
+    <bpmn:sequenceFlow id="production_flow_1" sourceRef="p_open" targetRef="p_run"/>
+    <bpmn:sequenceFlow id="production_flow_2" sourceRef="p_run" targetRef="p_finish"/>
+    <bpmn:sequenceFlow id="production_flow_3" sourceRef="p_finish" targetRef="p_end"/>
+  </bpmn:process>
+  <bpmn:process id="Process_quality" name="Quality Control" isExecutable="true">
+    <bpmn:extensionElements><esdm:meta context="quality" aggregate="inspection"/></bpmn:extensionElements>
+    <bpmn:startEvent id="q_start" name="inspection requested"><bpmn:outgoing>quality_flow_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:serviceTask id="q_begin" name="start inspection"><bpmn:extensionElements><esdm:meta state="inspecting"/><esdm:field name="workorderId" type="string"/></bpmn:extensionElements><bpmn:incoming>quality_flow_0</bpmn:incoming><bpmn:outgoing>quality_flow_1</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:userTask id="q_record" name="record inspection"><bpmn:extensionElements><esdm:meta state="inspected"/><esdm:field name="defects" type="integer"/></bpmn:extensionElements><bpmn:incoming>quality_flow_1</bpmn:incoming><bpmn:incoming>quality_flow_6</bpmn:incoming><bpmn:outgoing>quality_flow_2</bpmn:outgoing></bpmn:userTask>
+    <bpmn:exclusiveGateway id="q_gw" name="defects?"><bpmn:incoming>quality_flow_2</bpmn:incoming><bpmn:outgoing>quality_flow_3</bpmn:outgoing><bpmn:outgoing>quality_flow_4</bpmn:outgoing></bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="q_pass" name="pass inspection"><bpmn:extensionElements><esdm:meta state="passed"/></bpmn:extensionElements><bpmn:incoming>quality_flow_3</bpmn:incoming><bpmn:outgoing>quality_flow_5</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:endEvent id="q_passend" name="passed"><bpmn:incoming>quality_flow_5</bpmn:incoming></bpmn:endEvent>
+    <bpmn:userTask id="q_rework" name="rework"><bpmn:extensionElements><esdm:meta state="inspecting" lifecycle="mutate"/></bpmn:extensionElements><bpmn:incoming>quality_flow_4</bpmn:incoming><bpmn:outgoing>quality_flow_6</bpmn:outgoing></bpmn:userTask>
+    <bpmn:sequenceFlow id="quality_flow_0" sourceRef="q_start" targetRef="q_begin"/>
+    <bpmn:sequenceFlow id="quality_flow_1" sourceRef="q_begin" targetRef="q_record"/>
+    <bpmn:sequenceFlow id="quality_flow_2" sourceRef="q_record" targetRef="q_gw"/>
+    <bpmn:sequenceFlow id="quality_flow_3" sourceRef="q_gw" targetRef="q_pass"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">defects = 0</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="quality_flow_4" sourceRef="q_gw" targetRef="q_rework"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">defects &gt; 0</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="quality_flow_5" sourceRef="q_pass" targetRef="q_passend"/>
+    <bpmn:sequenceFlow id="quality_flow_6" sourceRef="q_rework" targetRef="q_record"/>
+  </bpmn:process>
+  <bpmn:process id="Process_warehouse" name="Warehouse" isExecutable="true">
+    <bpmn:extensionElements><esdm:meta context="warehouse" aggregate="shipment"/></bpmn:extensionElements>
+    <bpmn:startEvent id="w_start" name="shipment requested"><bpmn:outgoing>warehouse_flow_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:serviceTask id="w_create" name="create shipment"><bpmn:extensionElements><esdm:meta state="created"/><esdm:field name="inspectionId" type="string"/></bpmn:extensionElements><bpmn:incoming>warehouse_flow_0</bpmn:incoming><bpmn:outgoing>warehouse_flow_1</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:userTask id="w_pack" name="pack shipment"><bpmn:extensionElements><esdm:meta state="packed"/><esdm:field name="weight" type="number"/></bpmn:extensionElements><bpmn:incoming>warehouse_flow_1</bpmn:incoming><bpmn:outgoing>warehouse_flow_2</bpmn:outgoing></bpmn:userTask>
+    <bpmn:sendTask id="w_ship" name="ship shipment"><bpmn:extensionElements><esdm:meta state="shipped"/></bpmn:extensionElements><bpmn:incoming>warehouse_flow_2</bpmn:incoming><bpmn:outgoing>warehouse_flow_3</bpmn:outgoing></bpmn:sendTask>
+    <bpmn:endEvent id="w_end" name="shipped"><bpmn:incoming>warehouse_flow_3</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="warehouse_flow_0" sourceRef="w_start" targetRef="w_create"/>
+    <bpmn:sequenceFlow id="warehouse_flow_1" sourceRef="w_create" targetRef="w_pack"/>
+    <bpmn:sequenceFlow id="warehouse_flow_2" sourceRef="w_pack" targetRef="w_ship"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">weight &gt; 0</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="warehouse_flow_3" sourceRef="w_ship" targetRef="w_end"/>
+  </bpmn:process>
+  <bpmn:process id="Process_accounting" name="Accounting" isExecutable="true">
+    <bpmn:extensionElements><esdm:meta context="accounting" aggregate="invoice"/></bpmn:extensionElements>
+    <bpmn:startEvent id="a_start" name="invoice requested"><bpmn:outgoing>accounting_flow_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:serviceTask id="a_raise" name="raise invoice"><bpmn:extensionElements><esdm:meta state="raised"/><esdm:field name="shipmentId" type="string"/></bpmn:extensionElements><bpmn:incoming>accounting_flow_0</bpmn:incoming><bpmn:outgoing>accounting_flow_1</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:userTask id="a_price" name="price invoice"><bpmn:extensionElements><esdm:meta state="priced"/><esdm:field name="amount" type="number"/></bpmn:extensionElements><bpmn:incoming>accounting_flow_1</bpmn:incoming><bpmn:outgoing>accounting_flow_2</bpmn:outgoing></bpmn:userTask>
+    <bpmn:userTask id="a_pay" name="record payment"><bpmn:extensionElements><esdm:meta state="paying"/><esdm:field name="paidAmount" type="number"/></bpmn:extensionElements><bpmn:incoming>accounting_flow_2</bpmn:incoming><bpmn:outgoing>accounting_flow_3</bpmn:outgoing></bpmn:userTask>
+    <bpmn:serviceTask id="a_settle" name="settle invoice"><bpmn:extensionElements><esdm:meta state="settled"/></bpmn:extensionElements><bpmn:incoming>accounting_flow_3</bpmn:incoming><bpmn:outgoing>accounting_flow_4</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:endEvent id="a_end" name="settled"><bpmn:incoming>accounting_flow_4</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="accounting_flow_0" sourceRef="a_start" targetRef="a_raise"/>
+    <bpmn:sequenceFlow id="accounting_flow_1" sourceRef="a_raise" targetRef="a_price"/>
+    <bpmn:sequenceFlow id="accounting_flow_2" sourceRef="a_price" targetRef="a_pay"/>
+    <bpmn:sequenceFlow id="accounting_flow_3" sourceRef="a_pay" targetRef="a_settle"><bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">paidAmount &gt;= amount</bpmn:conditionExpression></bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="accounting_flow_4" sourceRef="a_settle" targetRef="a_end"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
+      <bpmndi:BPMNShape id="di_Participant_sales" bpmnElement="Participant_sales" isHorizontal="true"><dc:Bounds x="160" y="80" width="1180" height="280"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Participant_production" bpmnElement="Participant_production" isHorizontal="true"><dc:Bounds x="160" y="400" width="1180" height="160"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Participant_quality" bpmnElement="Participant_quality" isHorizontal="true"><dc:Bounds x="160" y="600" width="1180" height="280"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Participant_warehouse" bpmnElement="Participant_warehouse" isHorizontal="true"><dc:Bounds x="160" y="920" width="1180" height="160"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_Participant_accounting" bpmnElement="Participant_accounting" isHorizontal="true"><dc:Bounds x="160" y="1120" width="1180" height="160"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_start" bpmnElement="s_start"><dc:Bounds x="237" y="122" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_place" bpmnElement="s_place"><dc:Bounds x="380" y="100" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_review" bpmnElement="s_review"><dc:Bounds x="555" y="100" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_gw" bpmnElement="s_gw"><dc:Bounds x="755" y="115" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_confirm" bpmnElement="s_confirm"><dc:Bounds x="905" y="100" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_okend" bpmnElement="s_okend"><dc:Bounds x="1112" y="122" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_reject" bpmnElement="s_reject"><dc:Bounds x="905" y="220" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_s_rejend" bpmnElement="s_rejend"><dc:Bounds x="1112" y="242" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_p_start" bpmnElement="p_start"><dc:Bounds x="237" y="442" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_p_open" bpmnElement="p_open"><dc:Bounds x="380" y="420" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_p_run" bpmnElement="p_run"><dc:Bounds x="555" y="420" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_p_finish" bpmnElement="p_finish"><dc:Bounds x="730" y="420" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_p_end" bpmnElement="p_end"><dc:Bounds x="937" y="442" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_q_start" bpmnElement="q_start"><dc:Bounds x="237" y="642" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_q_begin" bpmnElement="q_begin"><dc:Bounds x="380" y="620" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_q_record" bpmnElement="q_record"><dc:Bounds x="555" y="620" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_q_gw" bpmnElement="q_gw"><dc:Bounds x="755" y="635" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_q_pass" bpmnElement="q_pass"><dc:Bounds x="905" y="620" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_q_passend" bpmnElement="q_passend"><dc:Bounds x="1112" y="642" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_q_rework" bpmnElement="q_rework"><dc:Bounds x="905" y="740" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_w_start" bpmnElement="w_start"><dc:Bounds x="237" y="962" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_w_create" bpmnElement="w_create"><dc:Bounds x="380" y="940" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_w_pack" bpmnElement="w_pack"><dc:Bounds x="555" y="940" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_w_ship" bpmnElement="w_ship"><dc:Bounds x="730" y="940" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_w_end" bpmnElement="w_end"><dc:Bounds x="937" y="962" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_a_start" bpmnElement="a_start"><dc:Bounds x="237" y="1162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_a_raise" bpmnElement="a_raise"><dc:Bounds x="380" y="1140" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_a_price" bpmnElement="a_price"><dc:Bounds x="555" y="1140" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_a_pay" bpmnElement="a_pay"><dc:Bounds x="730" y="1140" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_a_settle" bpmnElement="a_settle"><dc:Bounds x="905" y="1140" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="di_a_end" bpmnElement="a_end"><dc:Bounds x="1112" y="1162" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="di_sales_flow_0" bpmnElement="sales_flow_0"><di:waypoint x="273" y="140"/><di:waypoint x="380" y="140"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_sales_flow_1" bpmnElement="sales_flow_1"><di:waypoint x="480" y="140"/><di:waypoint x="555" y="140"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_sales_flow_2" bpmnElement="sales_flow_2"><di:waypoint x="655" y="140"/><di:waypoint x="755" y="140"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_sales_flow_3" bpmnElement="sales_flow_3"><di:waypoint x="805" y="140"/><di:waypoint x="905" y="140"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_sales_flow_4" bpmnElement="sales_flow_4"><di:waypoint x="780" y="165"/><di:waypoint x="780" y="260"/><di:waypoint x="905" y="260"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_sales_flow_5" bpmnElement="sales_flow_5"><di:waypoint x="1005" y="140"/><di:waypoint x="1112" y="140"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_sales_flow_6" bpmnElement="sales_flow_6"><di:waypoint x="1005" y="260"/><di:waypoint x="1112" y="260"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_production_flow_0" bpmnElement="production_flow_0"><di:waypoint x="273" y="460"/><di:waypoint x="380" y="460"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_production_flow_1" bpmnElement="production_flow_1"><di:waypoint x="480" y="460"/><di:waypoint x="555" y="460"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_production_flow_2" bpmnElement="production_flow_2"><di:waypoint x="655" y="460"/><di:waypoint x="730" y="460"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_production_flow_3" bpmnElement="production_flow_3"><di:waypoint x="830" y="460"/><di:waypoint x="937" y="460"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_quality_flow_0" bpmnElement="quality_flow_0"><di:waypoint x="273" y="660"/><di:waypoint x="380" y="660"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_quality_flow_1" bpmnElement="quality_flow_1"><di:waypoint x="480" y="660"/><di:waypoint x="555" y="660"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_quality_flow_2" bpmnElement="quality_flow_2"><di:waypoint x="655" y="660"/><di:waypoint x="755" y="660"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_quality_flow_3" bpmnElement="quality_flow_3"><di:waypoint x="805" y="660"/><di:waypoint x="905" y="660"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_quality_flow_4" bpmnElement="quality_flow_4"><di:waypoint x="780" y="685"/><di:waypoint x="780" y="780"/><di:waypoint x="905" y="780"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_quality_flow_5" bpmnElement="quality_flow_5"><di:waypoint x="1005" y="660"/><di:waypoint x="1112" y="660"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_quality_flow_6" bpmnElement="quality_flow_6"><di:waypoint x="955" y="740"/><di:waypoint x="955" y="720"/><di:waypoint x="605" y="720"/><di:waypoint x="605" y="700"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_warehouse_flow_0" bpmnElement="warehouse_flow_0"><di:waypoint x="273" y="980"/><di:waypoint x="380" y="980"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_warehouse_flow_1" bpmnElement="warehouse_flow_1"><di:waypoint x="480" y="980"/><di:waypoint x="555" y="980"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_warehouse_flow_2" bpmnElement="warehouse_flow_2"><di:waypoint x="655" y="980"/><di:waypoint x="730" y="980"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_warehouse_flow_3" bpmnElement="warehouse_flow_3"><di:waypoint x="830" y="980"/><di:waypoint x="937" y="980"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_accounting_flow_0" bpmnElement="accounting_flow_0"><di:waypoint x="273" y="1180"/><di:waypoint x="380" y="1180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_accounting_flow_1" bpmnElement="accounting_flow_1"><di:waypoint x="480" y="1180"/><di:waypoint x="555" y="1180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_accounting_flow_2" bpmnElement="accounting_flow_2"><di:waypoint x="655" y="1180"/><di:waypoint x="730" y="1180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_accounting_flow_3" bpmnElement="accounting_flow_3"><di:waypoint x="830" y="1180"/><di:waypoint x="905" y="1180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_accounting_flow_4" bpmnElement="accounting_flow_4"><di:waypoint x="1005" y="1180"/><di:waypoint x="1112" y="1180"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_MF_0" bpmnElement="MF_0"><di:waypoint x="955" y="180"/><di:waypoint x="955" y="300"/><di:waypoint x="430" y="300"/><di:waypoint x="430" y="420"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_MF_1" bpmnElement="MF_1"><di:waypoint x="780" y="500"/><di:waypoint x="780" y="560"/><di:waypoint x="430" y="560"/><di:waypoint x="430" y="620"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_MF_2" bpmnElement="MF_2"><di:waypoint x="955" y="700"/><di:waypoint x="955" y="820"/><di:waypoint x="430" y="820"/><di:waypoint x="430" y="940"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="di_MF_3" bpmnElement="MF_3"><di:waypoint x="780" y="1020"/><di:waypoint x="780" y="1080"/><di:waypoint x="430" y="1080"/><di:waypoint x="430" y="1140"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

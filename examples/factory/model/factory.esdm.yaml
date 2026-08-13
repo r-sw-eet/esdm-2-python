@@ -1,0 +1,1377 @@
+apiVersion: schema.esdm.io/core/v1
+kind: domain
+name: factory
+description: 'Generated from a BPMN model (proposal 0003).'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: sales
+scope:
+  domain: factory
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: order
+scope:
+  domain: factory
+  boundedContext: sales
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    customer:
+      type: string
+      default: ''
+    product:
+      type: string
+      default: ''
+    quantity:
+      type: integer
+      default: 0
+    creditOk:
+      type: boolean
+      default: false
+  required:
+    - id
+    - customer
+    - product
+    - quantity
+    - creditOk
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-placed
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    customer:
+      type: string
+    product:
+      type: string
+    quantity:
+      type: integer
+    status:
+      type: string
+      default: placed
+  required:
+    - id
+    - customer
+    - product
+    - quantity
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-reviewed
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    creditOk:
+      type: boolean
+    status:
+      type: string
+      default: reviewed
+  required:
+    - id
+    - creditOk
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-confirmed
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: confirmed
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: order-rejected
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: rejected
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: place-order
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    customer:
+      type: string
+    product:
+      type: string
+    quantity:
+      type: integer
+  required:
+    - customer
+    - product
+    - quantity
+publishes:
+  - order-placed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: review-order
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    creditOk:
+      type: boolean
+  required:
+    - id
+    - creditOk
+publishes:
+  - order-reviewed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: confirm-order
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - order-confirmed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: reject-order
+scope:
+  domain: factory
+  boundedContext: sales
+  aggregate: order
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - order-rejected
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: orders
+scope:
+  domain: factory
+  boundedContext: sales
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    customer:
+      type: string
+      default: ''
+    product:
+      type: string
+      default: ''
+    quantity:
+      type: integer
+      default: 0
+    creditOk:
+      type: boolean
+      default: false
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - customer
+    - product
+    - quantity
+    - creditOk
+    - status
+projections:
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-placed
+    rule: 'Insert a row.'
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-reviewed
+    rule: 'Update the row and set status to reviewed.'
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-confirmed
+    rule: 'Update the row and set status to confirmed.'
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-rejected
+    rule: 'Update the row and set status to rejected.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-orders
+scope:
+  domain: factory
+  boundedContext: sales
+readModel: orders
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-order
+scope:
+  domain: factory
+  boundedContext: sales
+readModel: orders
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: production
+scope:
+  domain: factory
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: workorder
+scope:
+  domain: factory
+  boundedContext: production
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    orderId:
+      type: string
+      default: ''
+  required:
+    - id
+    - orderId
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: work-order-opened
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    orderId:
+      type: string
+    status:
+      type: string
+      default: opened
+  required:
+    - id
+    - orderId
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: production-started
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: producing
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: production-finished
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: finished
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: open-work-order
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    orderId:
+      type: string
+  required:
+    - orderId
+publishes:
+  - work-order-opened
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: start-production
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - production-started
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: finish-production
+scope:
+  domain: factory
+  boundedContext: production
+  aggregate: workorder
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - production-finished
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: workorders
+scope:
+  domain: factory
+  boundedContext: production
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    orderId:
+      type: string
+      default: ''
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - orderId
+    - status
+projections:
+  -
+    boundedContext: production
+    aggregate: workorder
+    event: work-order-opened
+    rule: 'Insert a row.'
+  -
+    boundedContext: production
+    aggregate: workorder
+    event: production-started
+    rule: 'Update the row and set status to producing.'
+  -
+    boundedContext: production
+    aggregate: workorder
+    event: production-finished
+    rule: 'Update the row and set status to finished.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-workorders
+scope:
+  domain: factory
+  boundedContext: production
+readModel: workorders
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-workorder
+scope:
+  domain: factory
+  boundedContext: production
+readModel: workorders
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: quality
+scope:
+  domain: factory
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: inspection
+scope:
+  domain: factory
+  boundedContext: quality
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    workorderId:
+      type: string
+      default: ''
+    defects:
+      type: integer
+      default: 0
+  required:
+    - id
+    - workorderId
+    - defects
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: inspection-started
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    workorderId:
+      type: string
+    status:
+      type: string
+      default: inspecting
+  required:
+    - id
+    - workorderId
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: inspection-recorded
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    defects:
+      type: integer
+    status:
+      type: string
+      default: inspected
+  required:
+    - id
+    - defects
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: inspection-passed
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: passed
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: inspection-reworked
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: inspecting
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: start-inspection
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    workorderId:
+      type: string
+  required:
+    - workorderId
+publishes:
+  - inspection-started
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: record-inspection
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    defects:
+      type: integer
+  required:
+    - id
+    - defects
+publishes:
+  - inspection-recorded
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: pass-inspection
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - inspection-passed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: rework
+scope:
+  domain: factory
+  boundedContext: quality
+  aggregate: inspection
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - inspection-reworked
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: inspections
+scope:
+  domain: factory
+  boundedContext: quality
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    workorderId:
+      type: string
+      default: ''
+    defects:
+      type: integer
+      default: 0
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - workorderId
+    - defects
+    - status
+projections:
+  -
+    boundedContext: quality
+    aggregate: inspection
+    event: inspection-started
+    rule: 'Insert a row.'
+  -
+    boundedContext: quality
+    aggregate: inspection
+    event: inspection-recorded
+    rule: 'Update the row and set status to inspected.'
+  -
+    boundedContext: quality
+    aggregate: inspection
+    event: inspection-passed
+    rule: 'Update the row and set status to passed.'
+  -
+    boundedContext: quality
+    aggregate: inspection
+    event: inspection-reworked
+    rule: 'Update the row and set status to inspecting.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-inspections
+scope:
+  domain: factory
+  boundedContext: quality
+readModel: inspections
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-inspection
+scope:
+  domain: factory
+  boundedContext: quality
+readModel: inspections
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: warehouse
+scope:
+  domain: factory
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: shipment
+scope:
+  domain: factory
+  boundedContext: warehouse
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    inspectionId:
+      type: string
+      default: ''
+    weight:
+      type: number
+      default: 0
+  required:
+    - id
+    - inspectionId
+    - weight
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: shipment-created
+scope:
+  domain: factory
+  boundedContext: warehouse
+  aggregate: shipment
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    inspectionId:
+      type: string
+    status:
+      type: string
+      default: created
+  required:
+    - id
+    - inspectionId
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: shipment-packed
+scope:
+  domain: factory
+  boundedContext: warehouse
+  aggregate: shipment
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    weight:
+      type: number
+    status:
+      type: string
+      default: packed
+  required:
+    - id
+    - weight
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: shipment-shipped
+scope:
+  domain: factory
+  boundedContext: warehouse
+  aggregate: shipment
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: shipped
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: create-shipment
+scope:
+  domain: factory
+  boundedContext: warehouse
+  aggregate: shipment
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    inspectionId:
+      type: string
+  required:
+    - inspectionId
+publishes:
+  - shipment-created
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: pack-shipment
+scope:
+  domain: factory
+  boundedContext: warehouse
+  aggregate: shipment
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    weight:
+      type: number
+  required:
+    - id
+    - weight
+publishes:
+  - shipment-packed
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: ship-shipment
+scope:
+  domain: factory
+  boundedContext: warehouse
+  aggregate: shipment
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - shipment-shipped
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: shipments
+scope:
+  domain: factory
+  boundedContext: warehouse
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    inspectionId:
+      type: string
+      default: ''
+    weight:
+      type: number
+      default: 0
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - inspectionId
+    - weight
+    - status
+projections:
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    event: shipment-created
+    rule: 'Insert a row.'
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    event: shipment-packed
+    rule: 'Update the row and set status to packed.'
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    event: shipment-shipped
+    rule: 'Update the row and set status to shipped.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-shipments
+scope:
+  domain: factory
+  boundedContext: warehouse
+readModel: shipments
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-shipment
+scope:
+  domain: factory
+  boundedContext: warehouse
+readModel: shipments
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: bounded-context
+name: accounting
+scope:
+  domain: factory
+---
+apiVersion: schema.esdm.io/core/v1
+kind: aggregate
+name: invoice
+scope:
+  domain: factory
+  boundedContext: accounting
+identifiedBy:
+  source: state
+  field: id
+state:
+  type: object
+  properties:
+    id:
+      type: string
+    shipmentId:
+      type: string
+      default: ''
+    amount:
+      type: number
+      default: 0
+    paidAmount:
+      type: number
+      default: 0
+  required:
+    - id
+    - shipmentId
+    - amount
+    - paidAmount
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: invoice-raised
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    shipmentId:
+      type: string
+    status:
+      type: string
+      default: raised
+  required:
+    - id
+    - shipmentId
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: invoice-priced
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    amount:
+      type: number
+    status:
+      type: string
+      default: priced
+  required:
+    - id
+    - amount
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: payment-recorded
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    paidAmount:
+      type: number
+    status:
+      type: string
+      default: paying
+  required:
+    - id
+    - paidAmount
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: event
+name: invoice-settled
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    status:
+      type: string
+      default: settled
+  required:
+    - id
+    - status
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: raise-invoice
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: create
+data:
+  type: object
+  properties:
+    shipmentId:
+      type: string
+  required:
+    - shipmentId
+publishes:
+  - invoice-raised
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: price-invoice
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    amount:
+      type: number
+  required:
+    - id
+    - amount
+publishes:
+  - invoice-priced
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: record-payment
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+    paidAmount:
+      type: number
+  required:
+    - id
+    - paidAmount
+publishes:
+  - payment-recorded
+---
+apiVersion: schema.esdm.io/core/v1
+kind: command
+name: settle-invoice
+scope:
+  domain: factory
+  boundedContext: accounting
+  aggregate: invoice
+metadata:
+  annotations:
+    esdm-extensions.io/lifecycle: mutate
+data:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+publishes:
+  - invoice-settled
+---
+apiVersion: schema.esdm.io/core/v1
+kind: read-model
+name: invoices
+scope:
+  domain: factory
+  boundedContext: accounting
+paradigm: tabular
+schema:
+  type: object
+  properties:
+    id:
+      type: string
+    shipmentId:
+      type: string
+      default: ''
+    amount:
+      type: number
+      default: 0
+    paidAmount:
+      type: number
+      default: 0
+    status:
+      type: string
+      default: ''
+  required:
+    - id
+    - shipmentId
+    - amount
+    - paidAmount
+    - status
+projections:
+  -
+    boundedContext: accounting
+    aggregate: invoice
+    event: invoice-raised
+    rule: 'Insert a row.'
+  -
+    boundedContext: accounting
+    aggregate: invoice
+    event: invoice-priced
+    rule: 'Update the row and set status to priced.'
+  -
+    boundedContext: accounting
+    aggregate: invoice
+    event: payment-recorded
+    rule: 'Update the row and set status to paying.'
+  -
+    boundedContext: accounting
+    aggregate: invoice
+    event: invoice-settled
+    rule: 'Update the row and set status to settled.'
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: list-invoices
+scope:
+  domain: factory
+  boundedContext: accounting
+readModel: invoices
+result:
+  type: array
+  items:
+    type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: query
+name: get-invoice
+scope:
+  domain: factory
+  boundedContext: accounting
+readModel: invoices
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+  required:
+    - id
+result:
+  type: object
+---
+apiVersion: schema.esdm.io/core/v1
+kind: policy
+name: produce
+scope:
+  domain: factory
+deliveryGuarantee: at-most-once
+handles:
+  -
+    boundedContext: sales
+    aggregate: order
+    event: order-confirmed
+emits:
+  -
+    boundedContext: production
+    aggregate: workorder
+    command: open-work-order
+---
+apiVersion: schema.esdm.io/core/v1
+kind: policy
+name: inspect
+scope:
+  domain: factory
+deliveryGuarantee: at-most-once
+handles:
+  -
+    boundedContext: production
+    aggregate: workorder
+    event: production-finished
+emits:
+  -
+    boundedContext: quality
+    aggregate: inspection
+    command: start-inspection
+---
+apiVersion: schema.esdm.io/core/v1
+kind: policy
+name: fulfil
+scope:
+  domain: factory
+deliveryGuarantee: at-most-once
+handles:
+  -
+    boundedContext: quality
+    aggregate: inspection
+    event: inspection-passed
+emits:
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    command: create-shipment
+---
+apiVersion: schema.esdm.io/core/v1
+kind: policy
+name: bill
+scope:
+  domain: factory
+deliveryGuarantee: at-most-once
+handles:
+  -
+    boundedContext: warehouse
+    aggregate: shipment
+    event: shipment-shipped
+emits:
+  -
+    boundedContext: accounting
+    aggregate: invoice
+    command: raise-invoice
