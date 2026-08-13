@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+from ...feel import compile_to_python
+from ...mapping import parse as parse_mapping
 from ...model import Aggregate, BoundedContext, Command, Event, Feature, Model, Policy, ReadModel
 from ...names import camel, singular, snake, studly, upper_const
 from ...project import GeneratedProject
@@ -871,10 +873,22 @@ class DjangoEventSourcingAdapter:
             source_id = f'(getattr(event, "{self._identity_param_name(handle)}", "") or str(event.originator_id))'
         else:
             source_id = "str(event.originator_id)"
+        # A declared mapping (proposal 0005) wins per field; the rest falls back to the
+        # convention below, which is what that proposal documents as the default.
+        mapping = parse_mapping(policy.mapping) if policy.mapping else {}
+        # The handled aggregate's identity is not a payload attribute on this target - it is the
+        # stream id - so it resolves exactly as the fallback below resolves it.
+        resolve = lambda name: (  # noqa: E731
+            source_id if name == handle.identity_field else f"event.{snake(name)}"
+        )
+
         args = []
         if not is_create:
             args.append(source_id)
         for field in command.data:
+            if field.name in mapping:
+                args.append(compile_to_python(mapping[field.name], resolve)[0])
+                continue
             if field.is_identity:
                 # a policy-minted create inherits the source aggregate's id (usage.id = job.id)
                 if is_create:

@@ -15,6 +15,8 @@ from pathlib import Path
 import yaml
 
 from .feel import FeelError, parse, validate
+from .mapping import parse as parse_mapping
+from .mapping import validate as validate_mapping
 from .model import Model, create_model, load_directory
 from .project import AdapterRegistry
 
@@ -26,6 +28,49 @@ def _load_config(app_dir: Path) -> dict:
     loaded = yaml.safe_load(config_file.read_text())
     return loaded if isinstance(loaded, dict) else {}
 
+
+
+def _validate_reaction_mappings(model: Model) -> list[str]:
+    """Proposal 0005: a mapping may assign only fields the emitted command declares, must produce
+    every required one, and its expressions bind against the handled event's payload."""
+    errors: list[str] = []
+    for policy in model.policies:
+        if not policy.mapping:
+            continue
+        handled = model.aggregate(policy.handle_context, policy.handle_aggregate)
+        emitting = model.aggregate(policy.emit_context, policy.emit_aggregate)
+        if handled is None or emitting is None:
+            continue
+        event = handled.event(policy.handle_event)
+        command = next((c for c in emitting.commands if c.name == policy.emit_command), None)
+        if event is None or command is None:
+            continue
+
+        try:
+            mapping = parse_mapping(policy.mapping)
+        except FeelError as error:
+            errors.append(f"{policy.name}: {error}")
+            continue
+
+        declared = [f.name for f in command.data]
+        for key in mapping:
+            if key not in declared and key != emitting.identity_field:
+                shown = ", ".join(declared) or "nothing"
+                errors.append(
+                    f'{policy.name}: "{key}" is not a field of command "{command.name}" (declared: {shown})'
+                )
+        for field in command.data:
+            if field.required and field.name not in mapping:
+                errors.append(
+                    f'{policy.name}: required field "{field.name}" of command "{command.name}" '
+                    "is not assigned by the mapping"
+                )
+        errors.extend(
+            f"{policy.name}: {error}"
+            for error in validate_mapping(mapping, {f.name for f in event.data})
+        )
+
+    return errors
 
 
 def _validate_feel(model: Model) -> list[str]:
@@ -66,6 +111,13 @@ def _generate(args: argparse.Namespace) -> int:
     if feel_errors:
         print("FEEL guard errors:", file=sys.stderr)
         for error in feel_errors:
+            print(f"  - {error}", file=sys.stderr)
+        return 1
+
+    mapping_errors = _validate_reaction_mappings(model)
+    if mapping_errors:
+        print("Reaction mapping errors:", file=sys.stderr)
+        for error in mapping_errors:
             print(f"  - {error}", file=sys.stderr)
         return 1
 

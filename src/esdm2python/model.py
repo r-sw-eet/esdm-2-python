@@ -50,6 +50,9 @@ def _listy(value: Any) -> list:
     return [] if value is None else [value]
 
 
+MAPPING_ANNOTATION = "esdm-extensions.io/mapping"
+
+
 def _annotation(doc: dict, key: str) -> Any:
     return _record(_record(doc.get("metadata")).get("annotations")).get(key)
 
@@ -269,6 +272,8 @@ class Policy:
     emit_context: str
     emit_aggregate: str
     emit_command: str
+    # Raw `esdm-extensions.io/mapping` (proposal 0005); empty = the default convention.
+    mapping: str = ""
 
 
 @dataclass(frozen=True)
@@ -505,6 +510,7 @@ def create_model(documents: list[dict]) -> Model:
                 emit_context=str(emit.get("boundedContext") or "default"),
                 emit_aggregate=str(emit.get("aggregate")),
                 emit_command=str(emit.get("command") or ""),
+                mapping=str(_annotation(doc, MAPPING_ANNOTATION) or ""),
             )
         )
 

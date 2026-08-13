@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+from ...feel import compile_to_python
+from ...mapping import parse as parse_mapping
 from ...model import Aggregate, BoundedContext, Command, Event, Feature, Model, Policy, ReadModel
 from ...names import camel, snake, studly, upper_const
 from ...project import GeneratedProject
@@ -656,10 +658,21 @@ class DjangoEventSourcingDbAdapter(DjangoEventSourcingAdapter):
         is_create = command is emit.create_command()
 
         source_id = f'str(data.get("{self._payload_key(handle.identity_field)}", ""))'
+        # A declared mapping (proposal 0005) wins per field; the rest falls back to the
+        # convention below, which is what that proposal documents as the default.
+        mapping = parse_mapping(policy.mapping) if policy.mapping else {}
+
         args = []
         if not is_create:
             args.append(source_id)
         for field in command.data:
+            if field.name in mapping:
+                # Mirror the fallback's accessor, defaults included: a payload is an untyped dict.
+                resolve = lambda name, f=field: (  # noqa: E731
+                    f'data.get("{self._payload_key(name)}", {zero_literal(f)})'
+                )
+                args.append(coerce_payload(field, compile_to_python(mapping[field.name], resolve)[0]))
+                continue
             if field.is_identity:
                 # a policy-minted create inherits the source aggregate's id (usage.id = job.id)
                 if is_create:
