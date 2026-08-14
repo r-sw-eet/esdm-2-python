@@ -80,13 +80,15 @@ def _validate_feel(model: Model) -> list[str]:
         if sm is None:
             continue
         allowed = {f.name for f in aggregate.state} | {"status"}
+        # The arithmetic gate needs the declared types, which the binder never had.
+        types = {f.name: f.json_type for f in aggregate.state}
         for admit in sm.admits:
             if not admit.when:
                 continue
             try:
                 errors.extend(
                     f"{aggregate.name}/{admit.command}: {msg}"
-                    for msg in validate(parse(admit.when), allowed)
+                    for msg in validate(parse(admit.when), allowed, types)
                 )
             except FeelError as exc:
                 errors.append(f"{aggregate.name}/{admit.command}: {exc}")

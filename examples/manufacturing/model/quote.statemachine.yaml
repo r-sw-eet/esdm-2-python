@@ -22,5 +22,8 @@ transitions:                 # evolve
 admits:                      # decide (state) + FEEL guard (data/temporal)
   - { command: price-quote, from: [drafted, sent] }
   - { command: send-quote, from: [drafted] }
-  - { command: accept-quote, from: [sent], when: 'validUntil >= today()' }
+  # The arithmetic half is the conformance suite's only exercise of `*` (0002 amendment).
+  # Q1 is 4200 x 3 = 12600 and passes; a compiler that read `*` as +, - or / would yield
+  # 4203, 4197 or 1400, all below the threshold, and flip an observable outcome.
+  - { command: accept-quote, from: [sent], when: 'validUntil >= today() and amount * quantity >= 5000' }
   - { command: reject-quote, from: [sent] }

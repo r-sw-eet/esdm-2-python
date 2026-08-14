@@ -17,7 +17,7 @@ _TOKEN = re.compile(
       | (?P<num>\d+(?:\.\d+)?)
       | (?P<str>"[^"]*")
       | (?P<range>\.\.)
-      | (?P<op><=|>=|!=|=|<|>|-)
+      | (?P<op><=|>=|!=|=|<|>|[-+*/])
       | (?P<punc>[()\[\],])
       | (?P<name>[A-Za-z_][A-Za-z0-9_]*)
     """,
@@ -99,11 +99,11 @@ class _Parser:
         return node
 
     def _comparison(self) -> dict:
-        node = self._primary()
+        node = self._additive()
         kind, value = self._peek()
         if kind == "op" and value in _COMPARISONS:
             self._next()
-            return {"t": "bin", "op": value, "l": node, "r": self._primary()}
+            return {"t": "bin", "op": value, "l": node, "r": self._additive()}
         if (kind, value) == ("kw", "in"):
             self._next()
             return self._membership(node)
@@ -111,11 +111,27 @@ class _Parser:
         # compiler in the family unaware that it exists.
         if (kind, value) == ("kw", "between"):
             self._next()
-            low = self._primary()
+            low = self._additive()
             if self._peek() != ("kw", "and"):
                 raise FeelError('expected "and" in a between expression')
             self._next()
-            return _range(node, low, self._primary())
+            return _range(node, low, self._additive())
+        return node
+
+    def _additive(self) -> dict:
+        """Left-associative, and binding tighter than any comparison."""
+        node = self._multiplicative()
+        while self._peek() in (("op", "+"), ("op", "-")):
+            op = self._next()[1]
+            node = {"t": "bin", "op": op, "l": node, "r": self._multiplicative()}
+        return node
+
+    def _multiplicative(self) -> dict:
+        """Binds tighter than + and -."""
+        node = self._primary()
+        while self._peek() in (("op", "*"), ("op", "/")):
+            op = self._next()[1]
+            node = {"t": "bin", "op": op, "l": node, "r": self._primary()}
         return node
 
     def _membership(self, node: dict) -> dict:
@@ -199,8 +215,45 @@ def identifiers(node: dict) -> list[str]:
     return found
 
 
-def validate(node: dict, allowed_fields: set[str]) -> list[str]:
-    return [f'unknown field "{name}"' for name in identifiers(node) if name not in allowed_fields]
+def validate(node: dict, allowed_fields: set[str], field_types: dict[str, str] | None = None) -> list[str]:
+    errors = [f'unknown field "{name}"' for name in identifiers(node) if name not in allowed_fields]
+    _arithmetic(node, field_types or {}, errors)
+    return errors
+
+
+_ARITHMETIC = {"+", "-", "*", "/"}
+
+
+def _arithmetic(node: dict, types: dict[str, str], errors: list[str]) -> None:
+    """The arithmetic gates of 0002's 2026-08-14 amendment: an operand declared string or boolean
+    is not arithmetic, and a literal zero divisor never is. An absent type skips the type check."""
+    t = node.get("t")
+    if t == "bin":
+        if node["op"] in _ARITHMETIC:
+            _operand(node["l"], types, errors)
+            _operand(node["r"], types, errors)
+            if node["op"] == "/" and node["r"].get("t") == "num" and node["r"]["v"] == 0:
+                errors.append("division by a literal zero")
+        _arithmetic(node["l"], types, errors)
+        _arithmetic(node["r"], types, errors)
+    elif t in {"or", "and"}:
+        _arithmetic(node["l"], types, errors)
+        _arithmetic(node["r"], types, errors)
+    elif t in {"not", "neg"}:
+        _arithmetic(node["e"], types, errors)
+    elif t == "in":
+        _arithmetic(node["e"], types, errors)
+        for item in node["list"]:
+            _arithmetic(item, types, errors)
+
+
+def _operand(node: dict, types: dict[str, str], errors: list[str]) -> None:
+    if node.get("t") == "id":
+        declared = types.get(node["name"])
+        if declared in {"string", "boolean"}:
+            errors.append(f'arithmetic on the {declared} field "{node["name"]}"')
+    if node.get("t") in {"str", "bool"}:
+        errors.append("arithmetic on a " + ("string" if node["t"] == "str" else "boolean") + " literal")
 
 
 def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, bool, bool]:
@@ -216,6 +269,10 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
         if t == "not":
             return f"(not ({emit(n['e'])}))"
         if t == "bin":
+            # FEEL yields null on a zero divisor and null in a predicate is false; nan carries
+            # that, since every comparison against nan is False - and it avoids ZeroDivisionError.
+            if n["op"] == "/":
+                return f"(float('nan') if ({emit(n['r'])}) == 0 else {emit(n['l'])} / {emit(n['r'])})"
             op = "==" if n["op"] == "=" else n["op"]
             return f"({emit(n['l'])} {op} {emit(n['r'])})"
         if t == "in":

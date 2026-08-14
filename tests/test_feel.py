@@ -53,7 +53,22 @@ def test_between_and_ranges_desugar_into_two_comparisons():
     assert parse("qty in [1..10]") == expected
 
 
-def test_membership_stays_membership_and_binary_minus_waits_for_arithmetic():
+def test_membership_stays_membership():
     assert parse('status in ["a", "b"]')["t"] == "in"
-    with pytest.raises(FeelError):
-        parse("a - b")
+
+
+def test_arithmetic_precedence_and_safe_division():
+    assert parse("x = 1 + 2 * 3") == parse("x = 1 + (2 * 3)")
+    assert parse("a - b > 1")["t"] == "bin"
+    compiled, _, _ = compile_to_python(parse("total / count > 1"), lambda n: "self." + n)
+    # a zero divisor must not raise: nan makes the comparison False, which is FEEL's null
+    assert "nan" in compiled
+
+
+def test_the_arithmetic_gate_rejects_what_the_amendment_says_it_should():
+    types = {"amount": "number", "quantity": "integer", "status": "string"}
+    allowed = {"amount", "quantity", "status"}
+
+    assert validate(parse("amount * quantity >= 5000"), allowed, types) == []
+    assert validate(parse("status * 2 > 1"), allowed, types) == ['arithmetic on the string field "status"']
+    assert validate(parse("amount / 0 > 1"), allowed, types) == ["division by a literal zero"]
