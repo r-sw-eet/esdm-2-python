@@ -33,3 +33,10 @@ def test_validate_reports_unknown_fields():
 def test_malformed_raises():
     with pytest.raises(FeelError):
         parse("a >= ")
+
+def test_null_is_a_literal_not_a_field_name():
+    ast = parse("cancelledAt = null")
+
+    assert ast == {"t": "bin", "op": "=", "l": {"t": "id", "name": "cancelledAt"}, "r": {"t": "null"}}
+    # `null` used to lex as a name, so this reported: unknown field "null".
+    assert validate(ast, {"cancelledAt"}) == []

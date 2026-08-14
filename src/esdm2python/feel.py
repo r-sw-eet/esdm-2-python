@@ -23,7 +23,7 @@ _TOKEN = re.compile(
     re.VERBOSE,
 )
 
-_KEYWORDS = {"and", "or", "not", "in", "true", "false", "today", "now"}
+_KEYWORDS = {"and", "or", "not", "in", "true", "false", "null", "today", "now"}
 
 
 class FeelError(ValueError):
@@ -120,6 +120,9 @@ class _Parser:
             self._expect("(")
             self._expect(")")
             return {"t": "call", "fn": value}
+        if (kind, value) == ("kw", "null"):
+            # without this, `null` lexes as a name and binds as an unknown field
+            return {"t": "null"}
         if (kind, value) == ("kw", "true"):
             return {"t": "bool", "v": True}
         if (kind, value) == ("kw", "false"):
@@ -189,6 +192,8 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
             return repr(n["v"])
         if t == "bool":
             return "True" if n["v"] else "False"
+        if t == "null":
+            return "None"
         if t == "call":
             uses[n["fn"]] = True
             return n["fn"]
