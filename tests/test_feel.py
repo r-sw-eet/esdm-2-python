@@ -91,3 +91,20 @@ def test_unary_minus_compiles():
     compiled, _, _ = compile_to_python(parse("-amount > 1"), lambda n: "self." + n)
 
     assert compiled == "(-(self.amount) > 1)"
+
+
+def test_calls_carry_arguments_and_their_arity_is_checked():
+    assert validate(parse('contains(product, "c")'), {"product"}) == []
+    assert validate(parse("starts with(product)"), {"product"}) == ["starts with takes 2 arguments, got 1"]
+
+
+def test_date_arithmetic_is_a_shift_not_a_sum():
+    compiled, _, _ = compile_to_python(parse('validUntil + duration("P2W") >= today()'), lambda n: "self." + n)
+
+    # a duration is a literal, so its day count is computed at generation time: two weeks is 14
+    assert "timedelta(days=14)" in compiled
+
+
+def test_an_unsupported_duration_is_rejected():
+    with pytest.raises(FeelError):
+        compile_to_python(parse('validUntil + duration("P1M") >= today()'), lambda n: "self." + n)

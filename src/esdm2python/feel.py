@@ -25,6 +25,7 @@ _TOKEN = re.compile(
 )
 
 _KEYWORDS = {"and", "or", "not", "in", "between", "if", "then", "else", "true", "false", "null", "today", "now"}
+_FUNCTIONS = {"date", "duration", "contains"}
 _COMPARISONS = {"=", "!=", "<", "<=", ">", ">="}
 
 
@@ -148,6 +149,27 @@ class _Parser:
             node = {"t": "bin", "op": op, "l": node, "r": self._primary()}
         return node
 
+    def _two_word_function(self, kind: str, value: str) -> str | None:
+        """The function name if this token (plus maybe the next) starts a supported call."""
+        if kind == "name" and value in ("starts", "ends"):
+            following = self.tokens[self.i : self.i + 2]
+            if len(following) == 2 and following[0][1].lower() == "with" and following[1][1] == "(":
+                return f"{value} with"
+        if value in _FUNCTIONS and self._peek() == ("punc", "("):
+            return value
+        return None
+
+    def _arguments(self) -> list[dict]:
+        self._expect("(")
+        args: list[dict] = []
+        if self._peek() != ("punc", ")"):
+            args.append(self._or())
+            while self._peek() == ("punc", ","):
+                self._next()
+                args.append(self._or())
+        self._expect(")")
+        return args
+
     def _membership(self, node: dict) -> dict:
         """`x in [a, b]` stays a membership test; `x in [1..10]` desugars to a range."""
         self._expect("[")
@@ -186,7 +208,13 @@ class _Parser:
         if (kind, value) in (("kw", "today"), ("kw", "now")):
             self._expect("(")
             self._expect(")")
-            return {"t": "call", "fn": value}
+            return {"t": "call", "fn": value, "args": []}
+        # FEEL spells some function names with a space, so the name is up to two tokens.
+        function = self._two_word_function(kind, value)
+        if function is not None:
+            if " " in function:
+                self._next()
+            return {"t": "call", "fn": function, "args": self._arguments()}
         if (kind, value) == ("kw", "null"):
             # without this, `null` lexes as a name and binds as an unknown field
             return {"t": "null"}
@@ -222,6 +250,9 @@ def identifiers(node: dict) -> list[str]:
             walk(n["e"])
         elif t == "cond":
             walk(n["c"]); walk(n["a"]); walk(n["b"])
+        elif t == "call":
+            for argument in n.get("args", []):
+                walk(argument)
         elif t == "in":
             walk(n["e"])
             for item in n["list"]:
@@ -231,9 +262,29 @@ def identifiers(node: dict) -> list[str]:
     return found
 
 
+_ARITY = {"today": 0, "now": 0, "date": 1, "duration": 1, "starts with": 2, "ends with": 2, "contains": 2}
+
+
+def _calls(node: dict, errors: list[str]) -> None:
+    t = node.get("t")
+    if t == "call":
+        arity = _ARITY.get(node["fn"])
+        if arity is None:
+            errors.append(f'unknown function "{node["fn"]}"')
+        elif arity != len(node.get("args", [])):
+            plural = "" if arity == 1 else "s"
+            errors.append(f'{node["fn"]} takes {arity} argument{plural}, got {len(node.get("args", []))}')
+    for key in ("l", "r", "e", "c", "a", "b"):
+        if isinstance(node.get(key), dict):
+            _calls(node[key], errors)
+    for item in node.get("list", []) + node.get("args", []):
+        _calls(item, errors)
+
+
 def validate(node: dict, allowed_fields: set[str], field_types: dict[str, str] | None = None) -> list[str]:
     errors = [f'unknown field "{name}"' for name in identifiers(node) if name not in allowed_fields]
     _arithmetic(node, field_types or {}, errors)
+    _calls(node, errors)
     return errors
 
 
@@ -257,6 +308,9 @@ def _arithmetic(node: dict, types: dict[str, str], errors: list[str]) -> None:
         _arithmetic(node["r"], types, errors)
     elif t in {"not", "neg"}:
         _arithmetic(node["e"], types, errors)
+    elif t == "call":
+        for argument in node.get("args", []):
+            _arithmetic(argument, types, errors)
     elif t == "cond":
         _arithmetic(node["c"], types, errors)
         _arithmetic(node["a"], types, errors)
@@ -276,6 +330,17 @@ def _operand(node: dict, types: dict[str, str], errors: list[str]) -> None:
         errors.append("arithmetic on a " + ("string" if node["t"] == "str" else "boolean") + " literal")
 
 
+def duration_days(node: dict) -> int:
+    """A duration is always a literal, so its day count is computed here rather than by emitted
+    code. Weeks are days; months and years are not, since their length depends on the date."""
+    if node.get("t") != "str":
+        raise FeelError("duration() takes a string literal")
+    match = re.match(r"^P(\d+)([DW])$", node["v"])
+    if match is None:
+        raise FeelError(f'unsupported duration "{node["v"]}" - use P<n>D or P<n>W')
+    return int(match.group(1)) * (7 if match.group(2) == "W" else 1)
+
+
 def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, bool, bool]:
     """Compile a FEEL AST to a Python boolean expression over aggregate state."""
     uses = {"today": False, "now": False}
@@ -289,6 +354,14 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
         if t == "not":
             return f"(not ({emit(n['e'])}))"
         if t == "bin":
+            # `validUntil + duration("P14D")` is a date shift, not a sum.
+            if n["op"] in ("+", "-") and n["r"].get("fn") == "duration":
+                sign = "" if n["op"] == "+" else "-"
+                days = f"{sign}{duration_days(n['r']['args'][0])}"
+                return (
+                    f"(__import__('datetime').date.fromisoformat({emit(n['l'])})"
+                    f" + __import__('datetime').timedelta(days={days})).isoformat()"
+                )
             # FEEL yields null on a zero divisor and null in a predicate is false; nan carries
             # that, since every comparison against nan is False - and it avoids ZeroDivisionError.
             if n["op"] == "/":
@@ -313,8 +386,20 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
         if t == "cond":
             return f"(({emit(n['a'])}) if ({emit(n['c'])}) else ({emit(n['b'])}))"
         if t == "call":
-            uses[n["fn"]] = True
-            return n["fn"]
+            if n["fn"] in ("today", "now"):
+                uses[n["fn"]] = True
+                return n["fn"]
+            args = [emit(a) for a in n["args"]]
+            if n["fn"] == "date":
+                # an ISO-8601 date is already this family's wire form, so date() only normalises it
+                return f"__import__('datetime').date.fromisoformat({args[0]}).isoformat()"
+            if n["fn"] == "duration":
+                return str(duration_days(n["args"][0]))
+            if n["fn"] == "starts with":
+                return f"str({args[0]}).startswith(str({args[1]}))"
+            if n["fn"] == "ends with":
+                return f"str({args[0]}).endswith(str({args[1]}))"
+            return f"str({args[1]}) in str({args[0]})"
         raise FeelError(f"cannot compile node {n!r}")
 
     expr = emit(node)

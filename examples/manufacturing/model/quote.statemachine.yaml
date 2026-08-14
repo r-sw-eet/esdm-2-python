@@ -21,7 +21,9 @@ transitions:                 # evolve
   - { on: quote-rejected, to: rejected }
 admits:                      # decide (state) + FEEL guard (data/temporal)
   - { command: price-quote, from: [drafted, sent] }
-  - { command: send-quote, from: [drafted] }
+  # `starts with` and `contains` exercise call arguments; Q1's product is "flux capacitor"
+  # and Q2's is "compiler", so only the then-branch of the guard above can admit both.
+  - { command: send-quote, from: [drafted], when: 'contains(product, "c")' }
   # The arithmetic half is the conformance suite's only exercise of `*` (0002 amendment).
   # Q1 is 4200 x 3 = 12600 and passes; a compiler that read `*` as +, - or / would yield
   # 4203, 4197 or 1400, all below the threshold, and flip an observable outcome.
