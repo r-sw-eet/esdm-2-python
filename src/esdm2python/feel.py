@@ -24,7 +24,7 @@ _TOKEN = re.compile(
     re.VERBOSE,
 )
 
-_KEYWORDS = {"and", "or", "not", "in", "between", "true", "false", "null", "today", "now"}
+_KEYWORDS = {"and", "or", "not", "in", "between", "if", "then", "else", "true", "false", "null", "today", "now"}
 _COMPARISONS = {"=", "!=", "<", "<=", ">", ">="}
 
 
@@ -85,6 +85,20 @@ class _Parser:
         return node
 
     def _or(self) -> dict:
+        # `if` sits at the lowest precedence, so its branches are whole expressions and it needs
+        # no parentheses to hold them.
+        if self._peek() == ("kw", "if"):
+            self._next()
+            condition = self._or()
+            if self._peek() != ("kw", "then"):
+                raise FeelError('expected "then" in a conditional')
+            self._next()
+            when_true = self._or()
+            if self._peek() != ("kw", "else"):
+                raise FeelError('expected "else" in a conditional')
+            self._next()
+            return {"t": "cond", "c": condition, "a": when_true, "b": self._or()}
+
         node = self._and()
         while self._peek() == ("kw", "or"):
             self._next()
@@ -204,8 +218,10 @@ def identifiers(node: dict) -> list[str]:
             walk(n["l"]); walk(n["r"])
         elif t == "bin":
             walk(n["l"]); walk(n["r"])
-        elif t == "not":
+        elif t in ("not", "neg"):
             walk(n["e"])
+        elif t == "cond":
+            walk(n["c"]); walk(n["a"]); walk(n["b"])
         elif t == "in":
             walk(n["e"])
             for item in n["list"]:
@@ -241,6 +257,10 @@ def _arithmetic(node: dict, types: dict[str, str], errors: list[str]) -> None:
         _arithmetic(node["r"], types, errors)
     elif t in {"not", "neg"}:
         _arithmetic(node["e"], types, errors)
+    elif t == "cond":
+        _arithmetic(node["c"], types, errors)
+        _arithmetic(node["a"], types, errors)
+        _arithmetic(node["b"], types, errors)
     elif t == "in":
         _arithmetic(node["e"], types, errors)
         for item in node["list"]:
@@ -289,7 +309,9 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
         if t == "null":
             return "None"
         if t == "neg":
-            return f"-({_emit(n['e'], id_to_py, uses)})"
+            return f"-({emit(n['e'])})"
+        if t == "cond":
+            return f"(({emit(n['a'])}) if ({emit(n['c'])}) else ({emit(n['b'])}))"
         if t == "call":
             uses[n["fn"]] = True
             return n["fn"]

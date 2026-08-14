@@ -72,3 +72,22 @@ def test_the_arithmetic_gate_rejects_what_the_amendment_says_it_should():
     assert validate(parse("amount * quantity >= 5000"), allowed, types) == []
     assert validate(parse("status * 2 > 1"), allowed, types) == ['arithmetic on the string field "status"']
     assert validate(parse("amount / 0 > 1"), allowed, types) == ["division by a literal zero"]
+
+
+def test_conditionals_parse_bind_and_compile():
+    e = "if quantity > 1 then amount * quantity >= 5000 else amount >= 99999"
+    types = {"amount": "number", "quantity": "integer"}
+
+    assert validate(parse(e), {"amount", "quantity"}, types) == []
+    compiled, _, _ = compile_to_python(parse(e), lambda n: "self." + n)
+    assert " if " in compiled and " else " in compiled
+
+    with pytest.raises(FeelError):
+        parse("if a then b")
+
+
+def test_unary_minus_compiles():
+    # the emitter called a name that does not exist in scope, so this raised at generation time
+    compiled, _, _ = compile_to_python(parse("-amount > 1"), lambda n: "self." + n)
+
+    assert compiled == "(-(self.amount) > 1)"
