@@ -31,5 +31,5 @@ admits:                      # decide (state) + FEEL guard (data/temporal)
   # 2026-08-14). Q1 has quantity 3, so the THEN branch decides it: 4200 x 3 = 12600 passes.
   # A generator that always took the else branch would answer 4200 >= 99999 and reject Q1,
   # which the golden would catch.
-  - { command: accept-quote, from: [sent], when: 'validUntil >= today() and (if quantity > 1 then amount * quantity >= 5000 else amount >= 99999)' }
+  - { command: accept-quote, from: [sent], when: 'validUntil >= today() and count(tags) >= 1 and (if quantity > 1 then amount * quantity >= 5000 else amount >= 99999)' }
   - { command: reject-quote, from: [sent] }

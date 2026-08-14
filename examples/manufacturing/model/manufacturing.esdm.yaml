@@ -33,7 +33,8 @@ state:
     customerEmail: { type: string }
     product: { type: string }
     quantity: { type: integer }
-  required: [id, customerName, customerEmail, product, quantity]
+    tags: { type: array, items: { type: string } }
+  required: [id, customerName, customerEmail, product, quantity, tags]
 ---
 apiVersion: schema.esdm.io/core/v1
 kind: event
@@ -50,7 +51,8 @@ data:
     customerEmail: { type: string }
     product: { type: string }
     quantity: { type: integer }
-  required: [id, customerName, customerEmail, product, quantity]
+    tags: { type: array, items: { type: string } }
+  required: [id, customerName, customerEmail, product, quantity, tags]
 ---
 apiVersion: schema.esdm.io/core/v1
 kind: event
@@ -79,7 +81,8 @@ data:
     customerEmail: { type: string }
     product: { type: string }
     quantity: { type: integer }
-  required: [customerName, customerEmail, product, quantity]
+    tags: { type: array, items: { type: string } }
+  required: [customerName, customerEmail, product, quantity, tags]
 publishes:
   - request-submitted
 ---
@@ -116,10 +119,11 @@ state:
     customerName: { type: string, default: "" }
     product: { type: string, default: "" }
     quantity: { type: integer, default: 0 }
+    tags: { type: array, items: { type: string }, default: [] }
     amount: { type: number, default: 0 }
     currency: { type: string, default: EUR }
     validUntil: { type: string, default: "" }
-  required: [id, requestId, customerName, product, quantity, amount, currency, validUntil]
+  required: [id, requestId, customerName, product, quantity, tags, amount, currency, validUntil]
 ---
 apiVersion: schema.esdm.io/core/v1
 kind: event
@@ -136,8 +140,9 @@ data:
     customerName: { type: string }
     product: { type: string }
     quantity: { type: integer }
+    tags: { type: array, items: { type: string } }
     status: { type: string, default: drafted }
-  required: [id, requestId, customerName, product, quantity, status]
+  required: [id, requestId, customerName, product, quantity, tags, status]
 ---
 apiVersion: schema.esdm.io/core/v1
 kind: event
@@ -214,7 +219,8 @@ data:
     customerName: { type: string }
     product: { type: string }
     quantity: { type: integer }
-  required: [requestId, customerName, product, quantity]
+    tags: { type: array, items: { type: string } }
+  required: [requestId, customerName, product, quantity, tags]
 publishes:
   - quote-drafted
 ---
@@ -291,7 +297,7 @@ name: draft-quote-on-request
 # of the mapping path.
 metadata:
   annotations:
-    esdm-extensions.io/mapping: "{ requestId: id, customerName: customerName, product: product, quantity: quantity }"
+    esdm-extensions.io/mapping: "{ requestId: id, customerName: customerName, product: product, quantity: quantity, tags: tags }"
 scope:
   domain: manufacturing
 deliveryGuarantee: at-most-once

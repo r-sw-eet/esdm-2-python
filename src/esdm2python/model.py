@@ -68,12 +68,25 @@ class Field:
     default: Any
     has_default: bool
     is_identity: bool = False
+    # An object's `properties` and an array's `items`. Both used to be discarded, which is why
+    # FEEL could not bind a path or a collection element - the parser was never the obstacle.
+    nested: tuple["Field", ...] = ()
+    element: "Field | None" = None
 
     def with_identity(self, is_identity: bool) -> "Field":
         return Field(
             self.name, self.json_type, self.required,
             self.default, self.has_default, is_identity,
+            self.nested, self.element,
         )
+
+    def property_named(self, property_name: str) -> "Field | None":
+        """The field reached by `a.b`, or None when this field has no such property."""
+        return next((f for f in self.nested if f.name == property_name), None)
+
+    @property
+    def is_collection(self) -> bool:
+        return self.json_type == "array"
 
 
 @dataclass(frozen=True)
@@ -96,17 +109,34 @@ class Schema:
         props = _record(raw.get("properties"))
         fields = []
         for name, spec in props.items():
-            spec = _record(spec)
-            fields.append(
-                Field(
-                    name=str(name),
-                    json_type=str(spec.get("type", "mixed")),
-                    required=name in required,
-                    default=spec.get("default"),
-                    has_default="default" in spec,
-                )
-            )
+            fields.append(_build_field(str(name), spec, name in required))
         return Schema(tuple(fields))
+
+
+def _build_field(name: str, spec: Any, required: bool) -> Field:
+    """Keeps an object's own properties and an array's element, which FEEL needs to bind against."""
+    spec = _record(spec)
+    json_type = str(spec.get("type", "mixed"))
+    nested: tuple[Field, ...] = ()
+    element: Field | None = None
+
+    if json_type == "object":
+        inner_required = set(_listy(spec.get("required")))
+        nested = tuple(
+            _build_field(str(n), d, n in inner_required) for n, d in _record(spec.get("properties")).items()
+        )
+    if json_type == "array" and spec.get("items") is not None:
+        element = _build_field("item", spec.get("items"), True)
+
+    return Field(
+        name=name,
+        json_type=json_type,
+        required=required,
+        default=spec.get("default"),
+        has_default="default" in spec,
+        nested=nested,
+        element=element,
+    )
 
 
 def _schema_with_identity(schema: Schema, identity_field: str) -> Schema:

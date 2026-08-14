@@ -17,6 +17,7 @@ _TOKEN = re.compile(
       | (?P<num>\d+(?:\.\d+)?)
       | (?P<str>"[^"]*")
       | (?P<range>\.\.)
+      | (?P<dot>\.)
       | (?P<op><=|>=|!=|=|<|>|[-+*/])
       | (?P<punc>[()\[\],])
       | (?P<name>[A-Za-z_][A-Za-z0-9_]*)
@@ -24,8 +25,8 @@ _TOKEN = re.compile(
     re.VERBOSE,
 )
 
-_KEYWORDS = {"and", "or", "not", "in", "between", "if", "then", "else", "true", "false", "null", "today", "now"}
-_FUNCTIONS = {"date", "duration", "contains"}
+_KEYWORDS = {"and", "or", "not", "in", "between", "if", "then", "else", "every", "some", "satisfies", "true", "false", "null", "today", "now"}
+_FUNCTIONS = {"date", "duration", "contains", "count", "sum"}
 _COMPARISONS = {"=", "!=", "<", "<=", ">", ">="}
 
 
@@ -86,6 +87,20 @@ class _Parser:
         return node
 
     def _or(self) -> dict:
+        # `every x in xs satisfies p` and its `some` twin bind the variable for the predicate only.
+        if self._peek() in (("kw", "every"), ("kw", "some")):
+            every = self._next()[1] == "every"
+            variable = self._next()[1]
+            if self._peek() != ("kw", "in"):
+                raise FeelError('expected "in" in a quantified expression')
+            self._next()
+            collection = self._postfix()
+            if self._peek() != ("kw", "satisfies"):
+                raise FeelError('expected "satisfies" in a quantified expression')
+            self._next()
+            return {"t": "quant", "every": every, "variable": variable,
+                    "collection": collection, "predicate": self._or()}
+
         # `if` sits at the lowest precedence, so its branches are whole expressions and it needs
         # no parentheses to hold them.
         if self._peek() == ("kw", "if"):
@@ -143,10 +158,19 @@ class _Parser:
 
     def _multiplicative(self) -> dict:
         """Binds tighter than + and -."""
-        node = self._primary()
+        node = self._postfix()
         while self._peek() in (("op", "*"), ("op", "/")):
             op = self._next()[1]
-            node = {"t": "bin", "op": op, "l": node, "r": self._primary()}
+            node = {"t": "bin", "op": op, "l": node, "r": self._postfix()}
+        return node
+
+    def _postfix(self) -> dict:
+        """`a.b` binds tighter than any operator."""
+        node = self._primary()
+        while self._peek() == ("dot", "."):
+            self._next()
+            _, prop = self._next()
+            node = {"t": "path", "target": node, "property": prop}
         return node
 
     def _two_word_function(self, kind: str, value: str) -> str | None:
@@ -253,6 +277,10 @@ def identifiers(node: dict) -> list[str]:
         elif t == "call":
             for argument in n.get("args", []):
                 walk(argument)
+        elif t == "path":
+            walk(n["target"])
+        elif t == "quant":
+            walk(n["collection"])
         elif t == "in":
             walk(n["e"])
             for item in n["list"]:
@@ -262,7 +290,8 @@ def identifiers(node: dict) -> list[str]:
     return found
 
 
-_ARITY = {"today": 0, "now": 0, "date": 1, "duration": 1, "starts with": 2, "ends with": 2, "contains": 2}
+_ARITY = {"today": 0, "now": 0, "date": 1, "duration": 1, "starts with": 2, "ends with": 2,
+          "contains": 2, "count": 1, "sum": 1}
 
 
 def _calls(node: dict, errors: list[str]) -> None:
@@ -281,8 +310,24 @@ def _calls(node: dict, errors: list[str]) -> None:
         _calls(item, errors)
 
 
+def _quantified(node: dict, allowed: set[str], errors: list[str]) -> None:
+    """A quantifier's variable is in scope for its predicate only."""
+    if node.get("t") == "quant":
+        errors.extend(
+            f'unknown field "{name}"'
+            for name in identifiers(node["predicate"])
+            if name not in allowed | {node["variable"]}
+        )
+    for key in ("l", "r", "e", "c", "a", "b", "target", "collection"):
+        if isinstance(node.get(key), dict):
+            _quantified(node[key], allowed, errors)
+    for item in node.get("list", []) + node.get("args", []):
+        _quantified(item, allowed, errors)
+
+
 def validate(node: dict, allowed_fields: set[str], field_types: dict[str, str] | None = None) -> list[str]:
     errors = [f'unknown field "{name}"' for name in identifiers(node) if name not in allowed_fields]
+    _quantified(node, allowed_fields, errors)
     _arithmetic(node, field_types or {}, errors)
     _calls(node, errors)
     return errors
@@ -345,33 +390,43 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
     """Compile a FEEL AST to a Python boolean expression over aggregate state."""
     uses = {"today": False, "now": False}
 
-    def emit(n: dict) -> str:
+    def emit(n: dict, local: str | None = None) -> str:
         t = n["t"]
         if t == "or":
-            return f"({emit(n['l'])} or {emit(n['r'])})"
+            return f"({emit(n['l'], local)} or {emit(n['r'], local)})"
         if t == "and":
-            return f"({emit(n['l'])} and {emit(n['r'])})"
+            return f"({emit(n['l'], local)} and {emit(n['r'], local)})"
         if t == "not":
-            return f"(not ({emit(n['e'])}))"
+            return f"(not ({emit(n['e'], local)}))"
         if t == "bin":
             # `validUntil + duration("P14D")` is a date shift, not a sum.
             if n["op"] in ("+", "-") and n["r"].get("fn") == "duration":
                 sign = "" if n["op"] == "+" else "-"
                 days = f"{sign}{duration_days(n['r']['args'][0])}"
                 return (
-                    f"(__import__('datetime').date.fromisoformat({emit(n['l'])})"
+                    f"(__import__('datetime').date.fromisoformat({emit(n['l'], local)})"
                     f" + __import__('datetime').timedelta(days={days})).isoformat()"
                 )
             # FEEL yields null on a zero divisor and null in a predicate is false; nan carries
             # that, since every comparison against nan is False - and it avoids ZeroDivisionError.
             if n["op"] == "/":
-                return f"(float('nan') if ({emit(n['r'])}) == 0 else {emit(n['l'])} / {emit(n['r'])})"
+                return f"(float('nan') if ({emit(n['r'], local)}) == 0 else {emit(n['l'], local)} / {emit(n['r'], local)})"
             op = "==" if n["op"] == "=" else n["op"]
-            return f"({emit(n['l'])} {op} {emit(n['r'])})"
+            return f"({emit(n['l'], local)} {op} {emit(n['r'], local)})"
         if t == "in":
-            items = ", ".join(emit(item) for item in n["list"])
-            return f"({emit(n['e'])} in [{items}])"
+            items = ", ".join(emit(item, local) for item in n["list"])
+            return f"({emit(n['e'], local)} in [{items}])"
+        if t == "path":
+            # an object-typed field arrives as a dict, so a property is a lookup
+            return f"({emit(n['target'], local)} or {{}}).get({n['property']!r})"
+        if t == "quant":
+            collection = emit(n["collection"], local)
+            predicate = emit(n["predicate"], n["variable"])
+            builtin = "all" if n["every"] else "any"
+            return f"{builtin}({predicate} for {n['variable']} in ({collection} or []))"
         if t == "id":
+            if n["name"] == local:
+                return local
             return id_to_py(n["name"])
         if t == "str":
             return repr(n["v"])
@@ -382,19 +437,23 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
         if t == "null":
             return "None"
         if t == "neg":
-            return f"-({emit(n['e'])})"
+            return f"-({emit(n['e'], local)})"
         if t == "cond":
-            return f"(({emit(n['a'])}) if ({emit(n['c'])}) else ({emit(n['b'])}))"
+            return f"(({emit(n['a'], local)}) if ({emit(n['c'], local)}) else ({emit(n['b'], local)}))"
         if t == "call":
             if n["fn"] in ("today", "now"):
                 uses[n["fn"]] = True
                 return n["fn"]
-            args = [emit(a) for a in n["args"]]
+            args = [emit(a, local) for a in n["args"]]
             if n["fn"] == "date":
                 # an ISO-8601 date is already this family's wire form, so date() only normalises it
                 return f"__import__('datetime').date.fromisoformat({args[0]}).isoformat()"
             if n["fn"] == "duration":
                 return str(duration_days(n["args"][0]))
+            if n["fn"] == "count":
+                return f"len({args[0]} or [])"
+            if n["fn"] == "sum":
+                return f"sum({args[0]} or [])"
             if n["fn"] == "starts with":
                 return f"str({args[0]}).startswith(str({args[1]}))"
             if n["fn"] == "ends with":

@@ -108,3 +108,30 @@ def test_date_arithmetic_is_a_shift_not_a_sum():
 def test_an_unsupported_duration_is_rejected():
     with pytest.raises(FeelError):
         compile_to_python(parse('validUntil + duration("P1M") >= today()'), lambda n: "self." + n)
+
+
+def test_collections_and_paths_compile_and_scope():
+    r = lambda n: "self." + n  # noqa: E731
+
+    assert compile_to_python(parse("count(tags) >= 1"), r)[0] == "(len(self.tags or []) >= 1)"
+    assert compile_to_python(parse("sum(amounts) > 100"), r)[0] == "(sum(self.amounts or []) > 100)"
+    assert "all(" in compile_to_python(parse('every t in tags satisfies t != ""'), r)[0]
+    assert compile_to_python(parse('customer.name = "ada"'), r)[0] == "((self.customer or {}).get('name') == 'ada')"
+
+    # the quantifier variable is in scope for its predicate only
+    assert validate(parse('every t in tags satisfies t != ""'), {"tags"}) == []
+    assert validate(parse("some t in tags satisfies u = 1"), {"tags"}) == ['unknown field "u"']
+
+
+def test_the_model_layer_keeps_nested_and_element_types():
+    from esdm2python.model import Schema
+
+    schema = Schema.from_raw({
+        "properties": {
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "customer": {"type": "object", "properties": {"name": {"type": "string"}}},
+        }
+    })
+
+    assert schema.field("tags").element.json_type == "string"
+    assert schema.field("customer").property_named("name").json_type == "string"
