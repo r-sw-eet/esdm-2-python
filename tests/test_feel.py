@@ -40,3 +40,20 @@ def test_null_is_a_literal_not_a_field_name():
     assert ast == {"t": "bin", "op": "=", "l": {"t": "id", "name": "cancelledAt"}, "r": {"t": "null"}}
     # `null` used to lex as a name, so this reported: unknown field "null".
     assert validate(ast, {"cancelledAt"}) == []
+
+
+def test_a_negative_literal_folds_so_the_emitted_code_reads_naturally():
+    assert parse("amount > -1")["r"] == {"t": "num", "v": -1}
+
+
+def test_between_and_ranges_desugar_into_two_comparisons():
+    expected = parse("qty >= 1 and qty <= 10")
+
+    assert parse("qty between 1 and 10") == expected
+    assert parse("qty in [1..10]") == expected
+
+
+def test_membership_stays_membership_and_binary_minus_waits_for_arithmetic():
+    assert parse('status in ["a", "b"]')["t"] == "in"
+    with pytest.raises(FeelError):
+        parse("a - b")

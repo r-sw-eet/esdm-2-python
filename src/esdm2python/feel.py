@@ -16,14 +16,24 @@ _TOKEN = re.compile(
     r"""(?P<ws>\s+)
       | (?P<num>\d+(?:\.\d+)?)
       | (?P<str>"[^"]*")
-      | (?P<op><=|>=|!=|=|<|>)
+      | (?P<range>\.\.)
+      | (?P<op><=|>=|!=|=|<|>|-)
       | (?P<punc>[()\[\],])
       | (?P<name>[A-Za-z_][A-Za-z0-9_]*)
     """,
     re.VERBOSE,
 )
 
-_KEYWORDS = {"and", "or", "not", "in", "true", "false", "null", "today", "now"}
+_KEYWORDS = {"and", "or", "not", "in", "between", "true", "false", "null", "today", "now"}
+_COMPARISONS = {"=", "!=", "<", "<=", ">", ">="}
+
+
+def _range(value: dict, low: dict, high: dict) -> dict:
+    return {
+        "t": "and",
+        "l": {"t": "bin", "op": ">=", "l": value, "r": low},
+        "r": {"t": "bin", "op": "<=", "l": value, "r": high},
+    }
 
 
 class FeelError(ValueError):
@@ -91,21 +101,48 @@ class _Parser:
     def _comparison(self) -> dict:
         node = self._primary()
         kind, value = self._peek()
-        if kind == "op":
+        if kind == "op" and value in _COMPARISONS:
             self._next()
             return {"t": "bin", "op": value, "l": node, "r": self._primary()}
         if (kind, value) == ("kw", "in"):
             self._next()
-            self._expect("[")
-            items = [self._primary()]
-            while self._peek() == ("punc", ","):
-                self._next()
-                items.append(self._primary())
-            self._expect("]")
-            return {"t": "in", "e": node, "list": items}
+            return self._membership(node)
+        # `x between a and b` is sugar for two comparisons; desugaring here keeps every
+        # compiler in the family unaware that it exists.
+        if (kind, value) == ("kw", "between"):
+            self._next()
+            low = self._primary()
+            if self._peek() != ("kw", "and"):
+                raise FeelError('expected "and" in a between expression')
+            self._next()
+            return _range(node, low, self._primary())
         return node
 
+    def _membership(self, node: dict) -> dict:
+        """`x in [a, b]` stays a membership test; `x in [1..10]` desugars to a range."""
+        self._expect("[")
+        first = self._primary()
+        if self._peek() == ("range", ".."):
+            self._next()
+            high = self._primary()
+            self._expect("]")
+            return _range(node, first, high)
+        items = [first]
+        while self._peek() == ("punc", ","):
+            self._next()
+            items.append(self._primary())
+        self._expect("]")
+        return {"t": "in", "e": node, "list": items}
+
     def _primary(self) -> dict:
+        if self._peek() == ("op", "-"):
+            self._next()
+            kind, value = self._peek()
+            if kind == "num":
+                self._next()
+                return {"t": "num", "v": -(float(value) if "." in value else int(value))}
+            return {"t": "neg", "e": self._primary()}
+
         kind, value = self._next()
         if (kind, value) == ("punc", "("):
             node = self._or()
@@ -194,6 +231,8 @@ def compile_to_python(node: dict, id_to_py: Callable[[str], str]) -> tuple[str, 
             return "True" if n["v"] else "False"
         if t == "null":
             return "None"
+        if t == "neg":
+            return f"-({_emit(n['e'], id_to_py, uses)})"
         if t == "call":
             uses[n["fn"]] = True
             return n["fn"]
